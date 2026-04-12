@@ -1,14 +1,52 @@
 # ============================================================================
-# KWave.jl — kspace_first_order: Main simulation entry point
+# KWave.jl — kspace_first_order: Main simulation entry points (1D, 2D, 3D)
 # ============================================================================
+
+# ============================================================================
+# Shared helpers
+# ============================================================================
+
+"""
+Pre-compute absorption parameters from medium properties.
+Returns `nothing` if medium is lossless, otherwise an `AbsorptionParams`.
+"""
+function _precompute_absorption(medium::KWaveMedium, k_grid::AbstractArray, c_ref::Float64)
+    if is_lossless(medium)
+        return nothing
+    end
+
+    y = medium.alpha_power
+    alpha_nepers = db2neper(medium.alpha_coeff, y)
+
+    # Absorption and dispersion prefactors (Treeby & Cox, 2010)
+    absorb_tau = -2 * alpha_nepers * c_ref^(y - 1)
+    absorb_eta = 2 * alpha_nepers * c_ref^(y - 1) * tan(π * y / 2)
+
+    # Pre-multiply into k-space operators (used directly in frequency domain)
+    absorb_nabla1 = absorb_tau .* k_grid.^y          # absorption: tau * k^y
+    absorb_nabla2 = absorb_eta .* k_grid.^(y - 1)    # dispersion: eta * k^(y-1)
+
+    return AbsorptionParams(absorb_tau, absorb_eta, absorb_nabla1, absorb_nabla2, medium.alpha_mode)
+end
+
+"""
+Compute k-space correction factor: kappa = sinc(c_ref * k * dt / 2) (unnormalized).
+"""
+function _compute_kappa(k_grid::AbstractArray, c_ref::Float64, dt::Float64)
+    kappa = similar(k_grid)
+    for i in eachindex(k_grid)
+        arg = c_ref * k_grid[i] * dt / 2
+        kappa[i] = arg ≈ 0 ? 1.0 : sin(arg) / arg
+    end
+    return kappa
+end
 
 """
     kspace_first_order(kgrid, medium, source, sensor; kwargs...)
 
 Run a k-space pseudospectral time-domain simulation.
 
-This is the primary simulation function, dispatching on the grid dimensionality
-to run 1D, 2D, or 3D simulations.
+Dispatches on grid dimensionality (1D, 2D, 3D).
 
 # Arguments
 - `kgrid`: `KWaveGrid1D`, `KWaveGrid2D`, or `KWaveGrid3D`
@@ -26,31 +64,190 @@ to run 1D, 2D, or 3D simulations.
 - `data_cast`: Floating point type. Default: `Float64`
 - `save_to_disk`: Save input to HDF5 file at this path instead of running. Default: `nothing`
 - `plot_sim`: Display real-time simulation progress. Default: `false`
+- `plot_layout`: Layout for simulation display. Default: `:default`
+- `plot_scale`: Color scale for display. Default: `:auto`
+- `record_movie`: Path to save movie file, or `nothing`. Default: `nothing`
 - `progress_callback`: Optional callback `f(t_index, Nt, p_field)` called each step
 
 # Returns
 `SimulationOutput` containing recorded sensor data.
-
-# Example
-```julia
-# Create grid
-kgrid = KWaveGrid(128, 1e-4, 128, 1e-4)
-make_time!(kgrid, 1500.0)
-
-# Define medium
-medium = KWaveMedium(sound_speed=1500.0, density=1000.0)
-
-# Create initial pressure source (disc)
-p0 = Float64.(make_disc(128, 128, 64, 64, 10))
-source = KWaveSource(p0=p0)
-
-# Record everywhere
-sensor = KWaveSensor(mask=trues(128, 128))
-
-# Run simulation
-output = kspace_first_order(kgrid, medium, source, sensor)
-```
 """
+function kspace_first_order end
+
+# ============================================================================
+# 1D Solver
+# ============================================================================
+
+function kspace_first_order(
+    kgrid::KWaveGrid1D,
+    medium::KWaveMedium,
+    source::KWaveSource,
+    sensor::KWaveSensor;
+    pml_inside::Bool=true,
+    pml_size::Int=20,
+    pml_alpha::Float64=2.0,
+    smooth_p0::Bool=true,
+    smooth_c0::Bool=false,
+    smooth_rho0::Bool=false,
+    data_cast::Type{T}=Float64,
+    save_to_disk::Union{Nothing, String}=nothing,
+    plot_sim::Bool=false,
+    plot_layout::Symbol=:default,
+    plot_scale::Union{Symbol, Tuple}=:auto,
+    record_movie::Union{Nothing, String}=nothing,
+    progress_callback::Union{Nothing, Function}=nothing,
+) where T <: AbstractFloat
+
+    # ================================================================
+    # 1. Input validation
+    # ================================================================
+    if kgrid.Nt[] == 0 || kgrid.dt[] == 0
+        error("Time array not set. Call make_time!(kgrid, sound_speed) before running.")
+    end
+    validate_record_fields(sensor)
+    _check_time_reversal = is_time_reversal(sensor)
+
+    Nx = kgrid.Nx
+    dt = kgrid.dt[]
+    Nt = kgrid.Nt[]
+
+    # ================================================================
+    # 2. Save-to-disk mode
+    # ================================================================
+    if save_to_disk !== nothing
+        write_attributes(save_to_disk)
+        write_grid(save_to_disk, kgrid; pml_size=(pml_size,), pml_alpha=(pml_alpha,))
+        if medium.sound_speed isa AbstractArray
+            write_matrix(save_to_disk, "c0", medium.sound_speed)
+        else
+            write_matrix(save_to_disk, "c_ref", medium.sound_speed)
+        end
+        if has_p0(source)
+            write_matrix(save_to_disk, "p0", source.p0)
+        end
+        return SimulationOutput(Dict{Symbol, AbstractArray}())
+    end
+
+    # ================================================================
+    # 3. Pre-compute PML
+    # ================================================================
+    pml_x = get_pml(Nx, kgrid.dx, pml_size, pml_alpha, dt)
+    pml_x_sgx = get_pml(Nx, kgrid.dx, pml_size, pml_alpha, dt; staggered=true)
+
+    # ================================================================
+    # 4. Pre-compute k-space correction and absorption
+    # ================================================================
+    c_ref = medium.sound_speed isa Real ? medium.sound_speed : mean(medium.sound_speed)
+    kappa = _compute_kappa(kgrid.k, c_ref, dt)
+    absorb = _precompute_absorption(medium, kgrid.k, c_ref)
+
+    # ================================================================
+    # 5. Create FFT plans
+    # ================================================================
+    plans = create_fft_plans(kgrid; data_cast=T)
+
+    # ================================================================
+    # 6. Allocate field arrays
+    # ================================================================
+    p = zeros(Float64, Nx)
+    ux = zeros(Float64, Nx)
+    rhox = zeros(Float64, Nx)
+    scratch1 = zeros(ComplexF64, Nx)
+    scratch2 = zeros(ComplexF64, Nx)
+
+    # For dispersion: track previous total density
+    rho_total_prev = (absorb !== nothing && absorb.mode != :no_dispersion) ?
+        zeros(Float64, Nx) : nothing
+
+    # ================================================================
+    # 7. Sensor data
+    # ================================================================
+    sensor_data = _create_sensor_data(sensor, (Nx,), Nt)
+    mask_indices = if sensor.mask isa AbstractArray{Bool}
+        findall(sensor.mask)
+    else
+        CartesianIndex{1}[]
+    end
+
+    # ================================================================
+    # 8. Time-reversal setup
+    # ================================================================
+    tr_data = nothing
+    tr_mask_indices = CartesianIndex{1}[]
+    if _check_time_reversal
+        tr_data = sensor.time_reversal_boundary_data
+        Nt = size(tr_data, 2)
+        kgrid.Nt[] = Nt
+        # TR injection mask: sensor.mask defines where boundary data is injected
+        tr_mask_indices = sensor.mask isa AbstractArray{Bool} ? findall(sensor.mask) : CartesianIndex{1}[]
+    end
+
+    # ================================================================
+    # 9. Initialize from p0
+    # ================================================================
+    if !_check_time_reversal
+        initialize_p0_1d!(p, ux, rhox, source, kgrid, medium, plans, scratch1, smooth_p0)
+    end
+
+
+    # ================================================================
+    # 10. Time loop
+    # ================================================================
+    prog = Progress(Nt; desc="k-Wave 1D: ", enabled=true)
+
+    for t_index in 1:Nt
+        # Time-reversal: inject boundary data at sensor locations (reversed in time)
+        if _check_time_reversal
+            tr_t = Nt - t_index + 1
+            c0 = medium.sound_speed
+            for (j, idx) in enumerate(tr_mask_indices)
+                c_local = c0 isa Real ? c0 : c0[idx]
+                p_val = tr_data[j, tr_t]
+                rhox[idx] = p_val / c_local^2
+            end
+        end
+
+        time_step_1d!(
+            p, ux, rhox,
+            scratch1, scratch2,
+            kgrid, medium, source,
+            pml_x, pml_x_sgx,
+            kappa, plans, t_index,
+            absorb, rho_total_prev,
+        )
+
+        if !isempty(mask_indices)
+            velocities = (ux=ux,)
+            record_sensor_data!(sensor_data, p, velocities, sensor, mask_indices,
+                               t_index, Nt, dt, medium.density)
+        end
+
+        if progress_callback !== nothing
+            progress_callback(t_index, Nt, p)
+        end
+
+        next!(prog)
+    end
+
+    # ================================================================
+    # 11. Finalize
+    # ================================================================
+    finalize_sensor_data!(sensor_data, Nt)
+
+    # In time-reversal mode, always return full-field p_final
+    if _check_time_reversal
+        sensor_data[:p_final] = copy(p)
+    end
+    apply_sensor_directivity!(sensor_data, sensor, kgrid)
+    apply_frequency_response!(sensor_data, sensor, kgrid)
+
+    return SimulationOutput(sensor_data)
+end
+
+# ============================================================================
+# 2D Solver
+# ============================================================================
+
 function kspace_first_order(
     kgrid::KWaveGrid2D,
     medium::KWaveMedium,
@@ -65,6 +262,9 @@ function kspace_first_order(
     data_cast::Type{T}=Float64,
     save_to_disk::Union{Nothing, String}=nothing,
     plot_sim::Bool=false,
+    plot_layout::Symbol=:default,
+    plot_scale::Union{Symbol, Tuple}=:auto,
+    record_movie::Union{Nothing, String}=nothing,
     progress_callback::Union{Nothing, Function}=nothing,
 ) where T <: AbstractFloat
 
@@ -72,9 +272,10 @@ function kspace_first_order(
     # 1. Input validation
     # ================================================================
     if kgrid.Nt[] == 0 || kgrid.dt[] == 0
-        error("Time array not set. Call make_time!(kgrid, sound_speed) before running the simulation.")
+        error("Time array not set. Call make_time!(kgrid, sound_speed) before running.")
     end
     validate_record_fields(sensor)
+    _check_time_reversal = is_time_reversal(sensor)
 
     Nx, Ny = kgrid.Nx, kgrid.Ny
     dt = kgrid.dt[]
@@ -85,7 +286,7 @@ function kspace_first_order(
     pml_x_alpha, pml_y_alpha = pml_alpha isa Tuple ? pml_alpha : (pml_alpha, pml_alpha)
 
     # ================================================================
-    # 2. Save-to-disk mode (for C++ binary execution)
+    # 2. Save-to-disk mode
     # ================================================================
     if save_to_disk !== nothing
         write_attributes(save_to_disk)
@@ -106,7 +307,7 @@ function kspace_first_order(
     end
 
     # ================================================================
-    # 3. Pre-compute PML absorption arrays
+    # 3. Pre-compute PML
     # ================================================================
     pml_x = get_pml(Nx, kgrid.dx, pml_x_size, pml_x_alpha, dt)
     pml_y = get_pml(Ny, kgrid.dy, pml_y_size, pml_y_alpha, dt)
@@ -114,20 +315,11 @@ function kspace_first_order(
     pml_y_sgy = get_pml(Ny, kgrid.dy, pml_y_size, pml_y_alpha, dt; staggered=true)
 
     # ================================================================
-    # 4. Pre-compute k-space correction factor
+    # 4. Pre-compute k-space correction and absorption
     # ================================================================
-    # kappa = sinc(c_ref * k * dt / 2)
-    # where sinc(x) = sin(πx)/(πx) in Julia (normalized sinc)
-    # k-Wave uses unnormalized sinc: sin(x)/x
-    # So: kappa = sin(c_ref * k * dt / 2) / (c_ref * k * dt / 2)
     c_ref = medium.sound_speed isa Real ? medium.sound_speed : mean(medium.sound_speed)
-    kappa = similar(kgrid.k)
-    for j in 1:Ny
-        for i in 1:Nx
-            arg = c_ref * kgrid.k[i, j] * dt / 2
-            kappa[i, j] = arg ≈ 0 ? 1.0 : sin(arg) / arg
-        end
-    end
+    kappa = _compute_kappa(kgrid.k, c_ref, dt)
+    absorb = _precompute_absorption(medium, kgrid.k, c_ref)
 
     # ================================================================
     # 5. Create FFT plans
@@ -145,8 +337,11 @@ function kspace_first_order(
     scratch1 = zeros(ComplexF64, Nx, Ny)
     scratch2 = zeros(ComplexF64, Nx, Ny)
 
+    rho_total_prev = (absorb !== nothing && absorb.mode != :no_dispersion) ?
+        zeros(Float64, Nx, Ny) : nothing
+
     # ================================================================
-    # 7. Allocate sensor recording storage
+    # 7. Sensor data
     # ================================================================
     sensor_data = _create_sensor_data(sensor, (Nx, Ny), Nt)
     mask_indices = if sensor.mask isa AbstractArray{Bool}
@@ -156,31 +351,59 @@ function kspace_first_order(
     end
 
     # ================================================================
-    # 8. Initialize from p0 (photoacoustic initial value problem)
+    # 8. Time-reversal setup
     # ================================================================
-    initialize_p0_2d!(p, ux, uy, rhox, rhoy, source, kgrid, medium, plans, scratch1, smooth_p0)
+    tr_data = nothing
+    tr_mask_indices = CartesianIndex{2}[]
+    if _check_time_reversal
+        tr_data = sensor.time_reversal_boundary_data
+        Nt = size(tr_data, 2)
+        kgrid.Nt[] = Nt
+        tr_mask_indices = sensor.mask isa AbstractArray{Bool} ? findall(sensor.mask) : CartesianIndex{2}[]
+    end
 
     # ================================================================
-    # 9. Time loop
+    # 9. Initialize from p0
     # ================================================================
-    prog = Progress(Nt; desc="k-Wave simulation: ", enabled=!isnothing(progress_callback) || true)
+    if !_check_time_reversal
+        initialize_p0_2d!(p, ux, uy, rhox, rhoy, source, kgrid, medium, plans, scratch1, smooth_p0)
+    end
+
+
+    # ================================================================
+    # 10. Time loop
+    # ================================================================
+    prog = Progress(Nt; desc="k-Wave 2D: ", enabled=true)
 
     for t_index in 1:Nt
-        # Execute one time step
+        # Time-reversal: inject boundary data at sensor locations (reversed in time)
+        if _check_time_reversal
+            tr_t = Nt - t_index + 1
+            c0 = medium.sound_speed
+            for (j, idx) in enumerate(tr_mask_indices)
+                c_local = c0 isa Real ? c0 : c0[idx]
+                p_val = tr_data[j, tr_t]
+                rho_val = p_val / (2 * c_local^2)
+                rhox[idx] = rho_val
+                rhoy[idx] = rho_val
+            end
+        end
+
         time_step_2d!(
             p, ux, uy, rhox, rhoy,
             scratch1, scratch2,
             kgrid, medium, source,
             pml_x, pml_y, pml_x_sgx, pml_y_sgy,
             kappa, plans, t_index,
+            absorb, rho_total_prev,
         )
 
-        # Record sensor data
         if !isempty(mask_indices)
-            record_sensor_data!(sensor_data, p, ux, uy, sensor, mask_indices, t_index, Nt)
+            velocities = (ux=ux, uy=uy)
+            record_sensor_data!(sensor_data, p, velocities, sensor, mask_indices,
+                               t_index, Nt, dt, medium.density)
         end
 
-        # Progress callback
         if progress_callback !== nothing
             progress_callback(t_index, Nt, p)
         end
@@ -189,29 +412,22 @@ function kspace_first_order(
     end
 
     # ================================================================
-    # 10. Finalize and return
+    # 11. Finalize
     # ================================================================
     finalize_sensor_data!(sensor_data, Nt)
+
+    # In time-reversal mode, always return full-field p_final
+    if _check_time_reversal
+        sensor_data[:p_final] = reshape(copy(p), :)
+    end
+    apply_sensor_directivity!(sensor_data, sensor, kgrid)
+    apply_frequency_response!(sensor_data, sensor, kgrid)
 
     return SimulationOutput(sensor_data)
 end
 
 # ============================================================================
-# 1D solver stub (TODO: implement in Phase 2)
-# ============================================================================
-
-function kspace_first_order(
-    kgrid::KWaveGrid1D,
-    medium::KWaveMedium,
-    source::KWaveSource,
-    sensor::KWaveSensor;
-    kwargs...
-)
-    error("1D solver not yet implemented. Coming in Phase 2.")
-end
-
-# ============================================================================
-# 3D solver stub (TODO: implement in Phase 2)
+# 3D Solver
 # ============================================================================
 
 function kspace_first_order(
@@ -219,7 +435,181 @@ function kspace_first_order(
     medium::KWaveMedium,
     source::KWaveSource,
     sensor::KWaveSensor;
-    kwargs...
-)
-    error("3D solver not yet implemented. Coming in Phase 2.")
+    pml_inside::Bool=true,
+    pml_size::Union{Int, NTuple{3, Int}}=20,
+    pml_alpha::Union{Float64, NTuple{3, Float64}}=2.0,
+    smooth_p0::Bool=true,
+    smooth_c0::Bool=false,
+    smooth_rho0::Bool=false,
+    data_cast::Type{T}=Float64,
+    save_to_disk::Union{Nothing, String}=nothing,
+    plot_sim::Bool=false,
+    plot_layout::Symbol=:default,
+    plot_scale::Union{Symbol, Tuple}=:auto,
+    record_movie::Union{Nothing, String}=nothing,
+    progress_callback::Union{Nothing, Function}=nothing,
+) where T <: AbstractFloat
+
+    # ================================================================
+    # 1. Input validation
+    # ================================================================
+    if kgrid.Nt[] == 0 || kgrid.dt[] == 0
+        error("Time array not set. Call make_time!(kgrid, sound_speed) before running.")
+    end
+    validate_record_fields(sensor)
+    _check_time_reversal = is_time_reversal(sensor)
+
+    Nx, Ny, Nz = kgrid.Nx, kgrid.Ny, kgrid.Nz
+    dt = kgrid.dt[]
+    Nt = kgrid.Nt[]
+
+    # Normalize PML parameters
+    pml_x_size, pml_y_size, pml_z_size = pml_size isa Tuple ? pml_size : (pml_size, pml_size, pml_size)
+    pml_x_alpha, pml_y_alpha, pml_z_alpha = pml_alpha isa Tuple ? pml_alpha : (pml_alpha, pml_alpha, pml_alpha)
+
+    # ================================================================
+    # 2. Save-to-disk mode
+    # ================================================================
+    if save_to_disk !== nothing
+        write_attributes(save_to_disk)
+        write_grid(save_to_disk, kgrid; pml_size=(pml_x_size, pml_y_size, pml_z_size),
+                   pml_alpha=(pml_x_alpha, pml_y_alpha, pml_z_alpha))
+        if medium.sound_speed isa AbstractArray
+            write_matrix(save_to_disk, "c0", medium.sound_speed)
+        else
+            write_matrix(save_to_disk, "c_ref", medium.sound_speed)
+        end
+        if medium.density isa AbstractArray
+            write_matrix(save_to_disk, "rho0", medium.density)
+        end
+        if has_p0(source)
+            write_matrix(save_to_disk, "p0", source.p0)
+        end
+        return SimulationOutput(Dict{Symbol, AbstractArray}())
+    end
+
+    # ================================================================
+    # 3. Pre-compute PML
+    # ================================================================
+    pml_x = get_pml(Nx, kgrid.dx, pml_x_size, pml_x_alpha, dt)
+    pml_y = get_pml(Ny, kgrid.dy, pml_y_size, pml_y_alpha, dt)
+    pml_z = get_pml(Nz, kgrid.dz, pml_z_size, pml_z_alpha, dt)
+    pml_x_sgx = get_pml(Nx, kgrid.dx, pml_x_size, pml_x_alpha, dt; staggered=true)
+    pml_y_sgy = get_pml(Ny, kgrid.dy, pml_y_size, pml_y_alpha, dt; staggered=true)
+    pml_z_sgz = get_pml(Nz, kgrid.dz, pml_z_size, pml_z_alpha, dt; staggered=true)
+
+    # ================================================================
+    # 4. Pre-compute k-space correction and absorption
+    # ================================================================
+    c_ref = medium.sound_speed isa Real ? medium.sound_speed : mean(medium.sound_speed)
+    kappa = _compute_kappa(kgrid.k, c_ref, dt)
+    absorb = _precompute_absorption(medium, kgrid.k, c_ref)
+
+    # ================================================================
+    # 5. Create FFT plans
+    # ================================================================
+    plans = create_fft_plans(kgrid; data_cast=T)
+
+    # ================================================================
+    # 6. Allocate field arrays
+    # ================================================================
+    p = zeros(Float64, Nx, Ny, Nz)
+    ux = zeros(Float64, Nx, Ny, Nz)
+    uy = zeros(Float64, Nx, Ny, Nz)
+    uz = zeros(Float64, Nx, Ny, Nz)
+    rhox = zeros(Float64, Nx, Ny, Nz)
+    rhoy = zeros(Float64, Nx, Ny, Nz)
+    rhoz = zeros(Float64, Nx, Ny, Nz)
+    scratch1 = zeros(ComplexF64, Nx, Ny, Nz)
+    scratch2 = zeros(ComplexF64, Nx, Ny, Nz)
+
+    rho_total_prev = (absorb !== nothing && absorb.mode != :no_dispersion) ?
+        zeros(Float64, Nx, Ny, Nz) : nothing
+
+    # ================================================================
+    # 7. Sensor data
+    # ================================================================
+    sensor_data = _create_sensor_data(sensor, (Nx, Ny, Nz), Nt)
+    mask_indices = if sensor.mask isa AbstractArray{Bool}
+        findall(sensor.mask)
+    else
+        CartesianIndex{3}[]
+    end
+
+    # ================================================================
+    # 8. Time-reversal setup
+    # ================================================================
+    tr_data = nothing
+    tr_mask_indices = CartesianIndex{3}[]
+    if _check_time_reversal
+        tr_data = sensor.time_reversal_boundary_data
+        Nt = size(tr_data, 2)
+        kgrid.Nt[] = Nt
+        tr_mask_indices = sensor.mask isa AbstractArray{Bool} ? findall(sensor.mask) : CartesianIndex{3}[]
+    end
+
+    # ================================================================
+    # 9. Initialize from p0
+    # ================================================================
+    if !_check_time_reversal
+        initialize_p0_3d!(p, ux, uy, uz, rhox, rhoy, rhoz,
+                          source, kgrid, medium, plans, scratch1, smooth_p0)
+    end
+
+
+    # ================================================================
+    # 10. Time loop
+    # ================================================================
+    prog = Progress(Nt; desc="k-Wave 3D: ", enabled=true)
+
+    for t_index in 1:Nt
+        if _check_time_reversal
+            tr_t = Nt - t_index + 1
+            c0 = medium.sound_speed
+            for (j, idx) in enumerate(tr_mask_indices)
+                c_local = c0 isa Real ? c0 : c0[idx]
+                p_val = tr_data[j, tr_t]
+                rho_val = p_val / (3 * c_local^2)
+                rhox[idx] = rho_val
+                rhoy[idx] = rho_val
+                rhoz[idx] = rho_val
+            end
+        end
+
+        time_step_3d!(
+            p, ux, uy, uz, rhox, rhoy, rhoz,
+            scratch1, scratch2,
+            kgrid, medium, source,
+            pml_x, pml_y, pml_z,
+            pml_x_sgx, pml_y_sgy, pml_z_sgz,
+            kappa, plans, t_index,
+            absorb, rho_total_prev,
+        )
+
+        if !isempty(mask_indices)
+            velocities = (ux=ux, uy=uy, uz=uz)
+            record_sensor_data!(sensor_data, p, velocities, sensor, mask_indices,
+                               t_index, Nt, dt, medium.density)
+        end
+
+        if progress_callback !== nothing
+            progress_callback(t_index, Nt, p)
+        end
+
+        next!(prog)
+    end
+
+    # ================================================================
+    # 11. Finalize
+    # ================================================================
+    finalize_sensor_data!(sensor_data, Nt)
+
+    # In time-reversal mode, always return full-field p_final
+    if _check_time_reversal
+        sensor_data[:p_final] = reshape(copy(p), :)
+    end
+    apply_sensor_directivity!(sensor_data, sensor, kgrid)
+    apply_frequency_response!(sensor_data, sensor, kgrid)
+
+    return SimulationOutput(sensor_data)
 end

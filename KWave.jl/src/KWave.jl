@@ -21,6 +21,8 @@ export AbstractKWaveGrid, KWaveGrid1D, KWaveGrid2D, KWaveGrid3D
 export KWaveGrid, make_time!
 export total_grid_points, grid_size, grid_spacing, k_max
 export KWaveMedium, KWaveSource, KWaveSensor, SimulationOutput
+export is_homogeneous, is_lossless, is_nonlinear
+export is_time_reversal
 
 # Core utilities
 include("pml.jl")
@@ -48,11 +50,17 @@ export read_matrix, read_output
 
 # Visualization
 include("visualization/colormap.jl")
+include("visualization/field_display.jl")
 export get_color_map
+export SimulationDisplay, NullDisplay
+export create_sim_display, update_sim_display!, close_sim_display!
+export MovieRecorder, NullRecorder
+export create_movie_recorder, record_frame!, finalize_movie!
 
 # Solver
 include("solver/first_order_steps.jl")
 include("solver/first_order.jl")
 export kspace_first_order
+export AbsorptionParams
 
 end # module KWave

@@ -20,6 +20,9 @@ Base.@kwdef struct KWaveSensor
     mask::Union{Nothing, AbstractArray{Bool}, AbstractMatrix{Float64}} = nothing
     record::Vector{Symbol} = [:p]
     time_reversal_boundary_data::Union{Nothing, AbstractArray} = nothing
+    directivity_angle::Union{Nothing, AbstractArray} = nothing
+    directivity_size::Union{Nothing, Float64} = nothing
+    frequency_response::Union{Nothing, Tuple{Float64, Float64}} = nothing
 end
 
 # Valid record field names

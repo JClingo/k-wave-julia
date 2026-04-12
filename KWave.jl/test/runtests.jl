@@ -15,4 +15,8 @@ using HDF5
     include("test_filter.jl")
     include("test_io.jl")
     include("test_solver_2d.jl")
+    include("test_solver_1d.jl")
+    include("test_solver_3d.jl")
+    include("test_absorption.jl")
+    include("test_time_reversal.jl")
 end

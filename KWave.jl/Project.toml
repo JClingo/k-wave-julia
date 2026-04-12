@@ -1,6 +1,6 @@
 name = "KWave"
 uuid = "6515db03-cc09-4e48-9b6f-9f8a641b1330"
-version = "0.1.0"
+version = "0.2.0"
 authors = ["Joshua Clingo <joshuaclingo@gmail.com>"]
 
 [deps]
@@ -12,6 +12,12 @@ Interpolations = "a98d9a8b-a2ab-59e6-89dd-64a1c18fca59"
 LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
 ProgressMeter = "92933f4c-e287-5a05-a399-4b506db050ca"
 Statistics = "10745b16-79ce-11e8-11f9-7d13ad32a3b2"
+
+[weakdeps]
+GLMakie = "e9467ef8-e4e7-5192-8a1a-b1aee30e663a"
+
+[extensions]
+KWaveGLMakieExt = "GLMakie"
 
 [compat]
 DSP = "0.8.4"
