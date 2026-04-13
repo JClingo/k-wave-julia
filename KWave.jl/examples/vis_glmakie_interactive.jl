@@ -5,11 +5,30 @@
 # GLMakie provides GPU-accelerated rendering with mouse pan/zoom/rotate
 # and slider controls.
 #
+# REPL usage:
+#   fig = beam_plot(rand(128, 128))
+#   display(fig)             # opens a native window
+#
+# Script usage:
+#   screen = display(fig)
+#   wait(screen)             # keep the process alive while the window is open
+#
 # Requires: OpenGL-capable GPU or integrated graphics (Linux/macOS/Windows)
 # Install:  ] add GLMakie
 
 using KWave
 using GLMakie
+
+GLMakie.activate!()
+
+function show_figure(fig; keep_alive::Bool=false)
+    screen = display(fig)
+    if keep_alive && screen !== nothing
+        println("Keeping the final GLMakie window alive. Close it to exit.")
+        wait(screen)
+    end
+    return screen
+end
 
 # ============================================================================
 # Part 1: 2D simulation — interactive beam plot
@@ -40,11 +59,11 @@ p_max_2d   = reshape(result2d[:p_max],   Nx, Ny)
 # Interactive beam pattern — opens a native window with pan/zoom
 println("Opening beam plot (close window to continue)...")
 fig1 = beam_plot(p_final_2d; db_scale=true, db_range=40)
-display(fig1)
+show_figure(fig1)
 
 # Overlay — pressure on the medium map (fill scalar sound_speed to grid)
 fig2 = overlay_plot(fill(medium.sound_speed, Nx, Ny), p_max_2d; alpha=0.6)
-display(fig2)
+show_figure(fig2)
 
 # ============================================================================
 # Part 2: 3D simulation — fly-through and voxel rendering
@@ -75,7 +94,7 @@ p_max_3d   = reshape(result3d[:p_max],   Nx3, Ny3, Nz3)
 # Slider-controlled slice viewer — drag the slider to move through Z planes
 println("Opening fly-through viewer (drag slider to slice)...")
 fig3 = fly_through(p_final_3d; dim=3, db_scale=false)
-display(fig3)
+show_figure(fig3)
 
 # Volume rendering — interactive 3D view with mouse rotation
 println("Opening voxel volume render...")
@@ -83,7 +102,7 @@ fig4 = voxel_plot(p_max_3d;
                   mode=:volume,
                   db_scale=true, db_range=30,
                   dx=dx3, dy=dy3, dz=dz3)
-display(fig4)
+show_figure(fig4)
 
 # Isosurface at 50% of peak
 println("Opening isosurface plot...")
@@ -91,12 +110,12 @@ threshold = 0.5 * maximum(p_max_3d)
 fig5 = isosurface_plot(p_max_3d, threshold;
                        alpha=0.8,
                        dx=dx3, dy=dy3, dz=dz3)
-display(fig5)
+show_figure(fig5)
 
 # Maximum intensity projection
 println("Opening max-intensity projection...")
 fig6 = max_intensity_projection(p_max_3d)
-display(fig6)
+show_figure(fig6; keep_alive=true)
 
 # ============================================================================
 # Part 3: Real-time simulation monitoring
@@ -111,7 +130,8 @@ p0_rt[make_disc(Nx, Ny, 40, 64, 5)] .= 1.0
 source_rt = KWaveSource(p0=p0_rt)
 sensor_rt = KWaveSensor(mask=trues(Nx, Ny), record=[:p_max])
 
-# plot_sim=true opens a live window that updates each time step
+# plot_sim=true opens a live GLMakie window only if GLMakie is loaded
+# and this session can create desktop windows.
 println("Running with real-time display (watch the wavefront evolve)...")
 result_rt = kspace_first_order(kgrid_rt, medium, source_rt, sensor_rt;
                                plot_sim=true)
