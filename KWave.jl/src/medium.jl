@@ -24,23 +24,37 @@ struct KWaveMedium{T<:AbstractFloat}
     BonA::Union{Nothing, T, AbstractArray{T}}
 end
 
+# These helpers are extensible — extensions (e.g. KWaveUnitfulExt) add methods
+# for Unitful quantities so the main constructor never needs to be overwritten.
+_medium_to_speed(x::Real) = Float64(x)
+_medium_to_speed(x::AbstractArray{<:Real}) = Float64.(x)
+
+_medium_to_density(x::Real) = Float64(x)
+_medium_to_density(x::AbstractArray{<:Real}) = Float64.(x)
+
+_medium_to_f64(x::Nothing) = nothing
+_medium_to_f64(x::Real) = Float64(x)
+_medium_to_f64(x::AbstractArray{<:Real}) = Float64.(x)
+
 """
     KWaveMedium(; sound_speed, density=1.0, kwargs...)
 
 Create a KWaveMedium with Float64 values by default.
+Accepts plain numeric values; load KWaveUnitfulExt to pass Unitful quantities.
 """
-function KWaveMedium(; sound_speed::Union{Real, AbstractArray{<:Real}},
-                     density::Union{Real, AbstractArray{<:Real}}=1.0,
-                     alpha_coeff::Union{Nothing, Real, AbstractArray{<:Real}}=nothing,
-                     alpha_power::Union{Nothing, Real}=nothing,
+function KWaveMedium(; sound_speed,
+                     density=1.0,
+                     alpha_coeff=nothing,
+                     alpha_power=nothing,
                      alpha_mode::Symbol=:no_absorption,
-                     BonA::Union{Nothing, Real, AbstractArray{<:Real}}=nothing)
-    _f64 = x -> x === nothing ? nothing : (x isa AbstractArray ? Float64.(x) : Float64(x))
+                     BonA=nothing)
     return KWaveMedium{Float64}(
-        _f64(sound_speed), _f64(density),
-        _f64(alpha_coeff),
+        _medium_to_speed(sound_speed),
+        _medium_to_density(density),
+        _medium_to_f64(alpha_coeff),
         alpha_power === nothing ? nothing : Float64(alpha_power),
-        alpha_mode, _f64(BonA)
+        alpha_mode,
+        _medium_to_f64(BonA)
     )
 end
 

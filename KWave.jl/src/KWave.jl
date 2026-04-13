@@ -22,6 +22,7 @@ export KWaveGrid, make_time!
 export total_grid_points, grid_size, grid_spacing, k_max
 export KWaveMedium, KWaveSource, KWaveSensor, SimulationOutput
 export is_homogeneous, is_lossless, is_nonlinear
+export _medium_to_speed, _medium_to_density, _medium_to_f64
 export is_time_reversal
 
 # Core utilities

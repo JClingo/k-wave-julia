@@ -53,27 +53,15 @@ function KWave.KWaveGrid(nx::Int, dx::Unitful.Length, ny::Int, dy::Unitful.Lengt
                            nz, strip_to_SI(dz, m))
 end
 
-"""
-    KWaveMedium(; sound_speed::Unitful.Velocity, density::Unitful.Density, ...)
+# Extend the helper functions so KWaveMedium(; sound_speed=1500u"m/s") works
+# without overwriting the constructor (Julia cannot dispatch on kwarg types).
+KWave._medium_to_speed(x::Unitful.Velocity) = Float64(ustrip(uconvert(m/s, x)))
+KWave._medium_to_speed(x::AbstractArray{<:Unitful.Velocity}) =
+    Float64[ustrip(uconvert(m/s, xi)) for xi in x]
 
-Construct a KWaveMedium with physical units. Values are automatically
-converted to SI base units (m/s, kg/m³, etc.).
-"""
-function KWave.KWaveMedium(;
-    sound_speed::Union{Unitful.Velocity, AbstractArray{<:Unitful.Velocity}},
-    density::Union{Unitful.Density, AbstractArray{<:Unitful.Density}}=1000.0u"kg/m^3",
-    kwargs...)
-
-    c = sound_speed isa AbstractArray ?
-        Float64[ustrip(uconvert(m/s, ci)) for ci in sound_speed] :
-        Float64(ustrip(uconvert(m/s, sound_speed)))
-
-    rho = density isa AbstractArray ?
-        Float64[ustrip(uconvert(kg/m^3, di)) for di in density] :
-        Float64(ustrip(uconvert(kg/m^3, density)))
-
-    return KWave.KWaveMedium(; sound_speed=c, density=rho, kwargs...)
-end
+KWave._medium_to_density(x::Unitful.Density) = Float64(ustrip(uconvert(kg/m^3, x)))
+KWave._medium_to_density(x::AbstractArray{<:Unitful.Density}) =
+    Float64[ustrip(uconvert(kg/m^3, xi)) for xi in x]
 
 """
     make_time!(kgrid, sound_speed::Unitful.Velocity; kwargs...)
