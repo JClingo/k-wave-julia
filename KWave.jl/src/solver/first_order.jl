@@ -41,11 +41,15 @@ function _compute_kappa(k_grid::AbstractArray, c_ref::Float64, dt::Float64)
     return kappa
 end
 
+# ============================================================================
+# Solvers
+# ============================================================================
+
+
 """
     kspace_first_order(kgrid, medium, source, sensor; kwargs...)
 
 Run a k-space pseudospectral time-domain simulation.
-
 Dispatches on grid dimensionality (1D, 2D, 3D).
 
 # Arguments
@@ -72,7 +76,6 @@ Dispatches on grid dimensionality (1D, 2D, 3D).
 # Returns
 `SimulationOutput` containing recorded sensor data.
 """
-function kspace_first_order end
 
 # ============================================================================
 # 1D Solver

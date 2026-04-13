@@ -366,8 +366,8 @@ end
 # max_intensity_projection
 # ============================================================================
 
-function KWave.max_intensity_projection(field::AbstractArray{<:Real, 3};
-                                         colormap=nothing)
+function KWave._plot_max_intensity_projection(field::AbstractArray{<:Real, 3};
+                                              colormap=nothing)
     cmap = if colormap === nothing
         cmap_tuples = KWave.get_color_map()
         [RGBf(r, g, b) for (r, g, b) in cmap_tuples]

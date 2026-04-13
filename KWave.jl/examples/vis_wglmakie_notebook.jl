@@ -46,18 +46,22 @@ println("Running simulation...")
 result = kspace_first_order(kgrid, medium, source, sensor)
 println("Done.")
 
+# Full-field sensor data is returned flattened over the grid.
+p_final = reshape(result[:p_final], Nx, Ny)
+p_max = reshape(result[:p_max], Nx, Ny)
+
 # ----------------------------------------------------------------------------
 # Cell 1: Inline beam plot
 # (In Jupyter this renders as an interactive figure in the output cell)
 # ----------------------------------------------------------------------------
-fig1 = beam_plot(result[:p_final]; db_scale=true, db_range=40)
+fig1 = beam_plot(p_final; db_scale=true, db_range=40)
 display(fig1)
 
 # ----------------------------------------------------------------------------
 # Cell 2: Overlay — pressure field on the sound speed map
 # Pan and zoom work directly in the notebook output cell
 # ----------------------------------------------------------------------------
-fig2 = overlay_plot(c_map, result[:p_max];
+fig2 = overlay_plot(c_map, p_max;
                     alpha=0.65,
                     background_cmap=:thermal)
 display(fig2)

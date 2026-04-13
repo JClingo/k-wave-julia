@@ -28,7 +28,7 @@ For volume rendering, uses transfer functions to map values to color and opacity
 # Returns
 Plot figure (or `nothing` without a Makie backend).
 """
-function voxel_plot(volume::AbstractArray{<:Real, 3};
+function voxel_plot(volume::AbstractArray;
                     mode::Symbol=:volume,
                     threshold::Union{Nothing, Real}=nothing,
                     colormap=nothing,
@@ -59,7 +59,7 @@ Extract and render an isosurface from a 3D volume.
 # Returns
 Plot figure (or `nothing` without a Makie backend).
 """
-function isosurface_plot(volume::AbstractArray{<:Real, 3},
+function isosurface_plot(volume::AbstractArray,
                          threshold::Real;
                          colormap=nothing,
                          alpha::Real=0.8,
@@ -71,7 +71,7 @@ function isosurface_plot(volume::AbstractArray{<:Real, 3},
 end
 
 """
-    max_intensity_projection(volume; dims=3, db_scale=false, db_range=40)
+    max_intensity_projection(volume; dims=nothing, db_scale=false, db_range=40, colormap=nothing)
 
 Compute maximum intensity projection (MIP) of a 3D volume.
 
@@ -79,18 +79,24 @@ Compute maximum intensity projection (MIP) of a 3D volume.
 - `volume`: 3D array
 
 # Keyword Arguments
-- `dims`: Projection dimension(s) — 1, 2, 3, or :all (default: 3)
+- `dims`: Projection dimension(s) — 1, 2, 3, `:all`, or `nothing`
+- `colormap`: Colormap for plotted output when `dims === nothing`
 - `db_scale`: Apply dB scaling (default: false)
 - `db_range`: Dynamic range in dB (default: 40)
 
 # Returns
-2D projection(s). For `:all`, returns a named tuple `(xy=..., xz=..., yz=...)`.
+2D projection(s) when `dims` is set. For `:all`, returns a named tuple
+`(xy=..., xz=..., yz=...)`. When `dims === nothing`, returns a plotted figure
+if a visualization backend is loaded, otherwise `nothing`.
 """
 function max_intensity_projection(volume::AbstractArray{<:Real, 3};
-                                  dims::Union{Int, Symbol}=3,
+                                  dims::Union{Nothing, Int, Symbol}=nothing,
                                   db_scale::Bool=false,
-                                  db_range::Real=40)
-    if dims == :all
+                                  db_range::Real=40,
+                                  colormap=nothing)
+    if dims === nothing
+        return _plot_max_intensity_projection(volume; colormap=colormap)
+    elseif dims == :all
         mip_xy = dropdims(maximum(abs, volume; dims=3); dims=3)
         mip_xz = dropdims(maximum(abs, volume; dims=2); dims=2)
         mip_yz = dropdims(maximum(abs, volume; dims=1); dims=1)
@@ -107,6 +113,12 @@ function max_intensity_projection(volume::AbstractArray{<:Real, 3};
         end
         return mip
     end
+end
+
+function _plot_max_intensity_projection(volume::AbstractArray{<:Real, 3};
+                                        colormap=nothing)
+    @warn "max_intensity_projection requires a Makie backend (GLMakie or CairoMakie). Load one first."
+    return nothing
 end
 
 """Apply dB scaling to a field, clamping to db_range below maximum."""
