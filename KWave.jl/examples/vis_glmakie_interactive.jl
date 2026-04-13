@@ -33,13 +33,17 @@ sensor = KWaveSensor(mask=sensor_mask, record=[:p_final, :p_max])
 println("Running 2D simulation...")
 result2d = kspace_first_order(kgrid, medium, source, sensor)
 
+# Sensor data is stored as 1D vectors; reshape back to the grid for plotting.
+p_final_2d = reshape(result2d[:p_final], Nx, Ny)
+p_max_2d   = reshape(result2d[:p_max],   Nx, Ny)
+
 # Interactive beam pattern — opens a native window with pan/zoom
 println("Opening beam plot (close window to continue)...")
-fig1 = beam_plot(result2d[:p_final]; db_scale=true, db_range=40)
+fig1 = beam_plot(p_final_2d; db_scale=true, db_range=40)
 display(fig1)
 
-# Overlay — pressure on the medium map
-fig2 = overlay_plot(medium.sound_speed, result2d[:p_max]; alpha=0.6)
+# Overlay — pressure on the medium map (fill scalar sound_speed to grid)
+fig2 = overlay_plot(fill(medium.sound_speed, Nx, Ny), p_max_2d; alpha=0.6)
 display(fig2)
 
 # ============================================================================
@@ -64,14 +68,18 @@ sensor3d = KWaveSensor(mask=trues(Nx3, Ny3, Nz3), record=[:p_final, :p_max])
 println("Running 3D simulation (this may take a moment)...")
 result3d = kspace_first_order(kgrid3d, medium3d, source3d, sensor3d)
 
+# Sensor data is stored as 1D vectors; reshape back to the 3D grid for plotting.
+p_final_3d = reshape(result3d[:p_final], Nx3, Ny3, Nz3)
+p_max_3d   = reshape(result3d[:p_max],   Nx3, Ny3, Nz3)
+
 # Slider-controlled slice viewer — drag the slider to move through Z planes
 println("Opening fly-through viewer (drag slider to slice)...")
-fig3 = fly_through(result3d[:p_final]; dim=3, db_scale=false)
+fig3 = fly_through(p_final_3d; dim=3, db_scale=false)
 display(fig3)
 
 # Volume rendering — interactive 3D view with mouse rotation
 println("Opening voxel volume render...")
-fig4 = voxel_plot(result3d[:p_max];
+fig4 = voxel_plot(p_max_3d;
                   mode=:volume,
                   db_scale=true, db_range=30,
                   dx=dx3, dy=dy3, dz=dz3)
@@ -79,15 +87,15 @@ display(fig4)
 
 # Isosurface at 50% of peak
 println("Opening isosurface plot...")
-threshold = 0.5 * maximum(result3d[:p_max])
-fig5 = isosurface_plot(result3d[:p_max], threshold;
+threshold = 0.5 * maximum(p_max_3d)
+fig5 = isosurface_plot(p_max_3d, threshold;
                        alpha=0.8,
                        dx=dx3, dy=dy3, dz=dz3)
 display(fig5)
 
 # Maximum intensity projection
 println("Opening max-intensity projection...")
-fig6 = max_intensity_projection(result3d[:p_max])
+fig6 = max_intensity_projection(p_max_3d)
 display(fig6)
 
 # ============================================================================
