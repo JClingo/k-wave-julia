@@ -32,6 +32,7 @@ makedocs(
             "Unitful Integration" => "manual/unitful.md",
             "Python Interop"      => "manual/python_interop.md",
             "HDF5 File Format"    => "manual/hdf5_format.md",
+            "Benchmarking"        => "manual/benchmarking.md",
         ],
         "Examples" => [
             "Gallery"                        => "examples/index.md",

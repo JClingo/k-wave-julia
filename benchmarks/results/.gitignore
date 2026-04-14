@@ -1,0 +1,3 @@
+# Benchmark result files — generated locally, not committed
+*.csv
+plots/
