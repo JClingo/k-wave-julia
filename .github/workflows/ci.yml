@@ -33,6 +33,10 @@ jobs:
         with:
           cache-name: "ci-${{ matrix.os }}-${{ matrix.julia-version }}"
 
+      - uses: conda-incubator/setup-miniconda@v3
+        with:
+          auto-activate-base: true
+
       - name: Install dependencies
         run: |
           julia --project -e '
