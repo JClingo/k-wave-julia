@@ -75,12 +75,20 @@ Dispatches on grid dimensionality (1D, 2D, 3D).
 
 # Returns
 `SimulationOutput` containing recorded sensor data.
+
+# Notes
+- Call [`make_time!`](@ref) on `kgrid` before this function.
+- Grid dimensionality is dispatched automatically from `kgrid` type.
+- Use `data_cast=Float32` with GPU backends (CUDA / Metal / AMDGPU).
+- Pass `save_to_disk="/path/input.h5"` to write an HDF5 input file for the k-Wave C++ binary
+  instead of running the simulation.
+
+# See Also
+[`kspace_first_order_as`](@ref), [`acoustic_field_propagator`](@ref),
+[`KWaveGrid`](@ref), [`make_time!`](@ref), [`KWaveMedium`](@ref),
+[`KWaveSource`](@ref), [`KWaveSensor`](@ref), [`SimulationOutput`](@ref),
+[`get_optimal_pml_size`](@ref)
 """
-
-# ============================================================================
-# 1D Solver
-# ============================================================================
-
 function kspace_first_order(
     kgrid::KWaveGrid1D,
     medium::KWaveMedium,

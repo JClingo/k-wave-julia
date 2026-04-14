@@ -41,6 +41,23 @@ _medium_to_f64(x::AbstractArray{<:Real}) = Float64.(x)
 
 Create a KWaveMedium with Float64 values by default.
 Accepts plain numeric values; load KWaveUnitfulExt to pass Unitful quantities.
+
+# Keyword Arguments
+- `sound_speed`: Sound speed [m/s] — scalar or array matching grid size
+- `density`: Mass density [kg/m³] — scalar or array (default: `1.0`)
+- `alpha_coeff`: Power-law absorption coefficient [dB/(MHz^y cm)] (optional)
+- `alpha_power`: Power-law exponent `y` — typically 1.0–2.0 for tissue
+- `alpha_mode`: Absorption mode — `:no_absorption` (default), `:no_dispersion`, `:stokes`
+- `BonA`: Nonlinearity parameter B/A (optional)
+
+# Notes
+- Use `:stokes` mode for broadband pulsed simulations.
+- Use `:no_dispersion` for narrowband CW simulations.
+- When `alpha_coeff` is set without `alpha_power`, absorption is disabled.
+
+# See Also
+[`is_homogeneous`](@ref), [`is_lossless`](@ref), [`is_nonlinear`](@ref),
+[`db2neper`](@ref), [`water_sound_speed`](@ref), [`KWaveSource`](@ref)
 """
 function KWaveMedium(; sound_speed,
                      density=1.0,

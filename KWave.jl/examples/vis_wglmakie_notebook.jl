@@ -5,17 +5,21 @@
 # or web browser. No GPU or display server required.
 #
 # To run in Jupyter:
-#   1. Install: ] add WGLMakie IJulia
+#   1. Install: ] add WGLMakie Bonito IJulia
 #   2. Start:   jupyter notebook
 #   3. Open this file or paste cells into a notebook
 #
 # To run as a standalone web app (Bonito/Pluto):
 #   ] add Bonito Pluto
 #
-# Install: ] add WGLMakie
+# Install: ] add WGLMakie Bonito
 
 using KWave
+using Bonito
 using WGLMakie
+
+Page()
+WGLMakie.activate!()
 
 # ----------------------------------------------------------------------------
 # Simulation — 2D heterogeneous medium
@@ -55,6 +59,7 @@ p_max = reshape(result[:p_max], Nx, Ny)
 # (In Jupyter this renders as an interactive figure in the output cell)
 # ----------------------------------------------------------------------------
 fig1 = beam_plot(p_final; db_scale=true, db_range=40)
+fig1 === nothing && error("WGLMakie plotting extension did not load. Make sure both Bonito and WGLMakie are loaded in this session.")
 display(fig1)
 
 # ----------------------------------------------------------------------------

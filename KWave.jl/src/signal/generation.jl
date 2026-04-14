@@ -22,6 +22,10 @@ Generate a windowed tone burst signal.
 ```julia
 signal = tone_burst(40e6, 1e6, 5)  # 5-cycle 1 MHz burst at 40 MHz sample rate
 ```
+
+# See Also
+[`gaussian_pulse`](@ref), [`create_cw_signals`](@ref), [`get_win`](@ref),
+[`apply_filter`](@ref), [`KWaveSource`](@ref)
 """
 function tone_burst(sample_freq::Real, signal_freq::Real, num_cycles::Int;
                     envelope::Symbol=:gaussian, signal_offset::Int=0,

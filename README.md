@@ -121,7 +121,10 @@ save("beam.svg", fig)   # Scalable SVG
 Renders interactive plots directly inside Jupyter notebooks or web applications.
 
 ```julia
-using KWave, WGLMakie   # run inside a Jupyter notebook
+using KWave, Bonito, WGLMakie   # run inside a Jupyter notebook
+
+Page()
+WGLMakie.activate!()
 
 output = kspace_first_order(grid, medium, source, sensor)
 beam_plot(output.p_final)   # Renders inline, with pan/zoom

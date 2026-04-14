@@ -16,6 +16,13 @@ Map Cartesian points onto the nearest grid points.
 - `grid_mask`: BitArray with `true` at grid points nearest to the Cartesian points
 - `order_index`: Indices mapping Cartesian points to their grid positions
 - `reorder_index`: Inverse mapping to recover original point order
+
+# Notes
+Multiple Cartesian points may map to the same grid point.
+`order_index` enables consistent signal ordering when this occurs.
+
+# See Also
+[`grid2cart`](@ref), [`KWaveSensor`](@ref), [`KWaveArray`](@ref)
 """
 function cart2grid(kgrid::KWaveGrid2D, cart_data::AbstractMatrix)
     n_points = size(cart_data, 2)
@@ -68,6 +75,9 @@ Extract Cartesian coordinates from grid points where `mask` is `true`.
 
 # Returns
 Matrix of Cartesian coordinates (ndims × n_points).
+
+# See Also
+[`cart2grid`](@ref), [`KWaveSensor`](@ref)
 """
 function grid2cart(kgrid::KWaveGrid2D, mask::AbstractArray{Bool})
     indices = findall(mask)

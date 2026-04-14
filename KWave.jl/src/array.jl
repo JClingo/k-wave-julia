@@ -6,6 +6,13 @@
 # Array element types
 # ============================================================================
 
+"""
+    ArrayElement
+
+Abstract supertype for all transducer array element geometries.
+Concrete subtypes: [`ArcElement`](@ref), [`BowlElement`](@ref), [`DiscElement`](@ref),
+[`RectElement`](@ref), [`SphereElement`](@ref).
+"""
 abstract type ArrayElement end
 
 """Arc element in 2D."""

@@ -166,6 +166,19 @@ Create a k-Wave computational grid.
 # Arguments
 - `Nx`, `Ny`, `Nz`: Number of grid points in each dimension
 - `dx`, `dy`, `dz`: Grid spacing in each dimension [m]
+
+# Returns
+Returns [`KWaveGrid1D`](@ref), [`KWaveGrid2D`](@ref), or [`KWaveGrid3D`](@ref) based on
+the number of arguments. Call [`make_time!`](@ref) on the result before running a solver.
+
+# Example
+```julia
+kgrid = KWaveGrid(256, 0.1e-3, 256, 0.1e-3)
+make_time!(kgrid, 1500.0)
+```
+
+# See Also
+[`make_time!`](@ref), [`k_max`](@ref), [`total_grid_points`](@ref), [`get_optimal_pml_size`](@ref)
 """
 function KWaveGrid(Nx::Int, dx::Real)
     dx = Float64(dx)
@@ -269,7 +282,14 @@ grid_spacing(g::KWaveGrid3D) = (g.dx, g.dy, g.dz)
 """
     k_max(grid)
 
-Return the maximum supported wavenumber (Nyquist).
+Return the maximum supported wavenumber (Nyquist limit) [rad/m].
+
+`k_max = π / dx` (for the finest-spaced dimension).
+Used internally for stability checks; also indicates the highest spatial frequency
+resolvable on the grid.
+
+# See Also
+[`KWaveGrid`](@ref), [`make_time!`](@ref), [`total_grid_points`](@ref)
 """
 k_max(g::KWaveGrid1D) = π / g.dx
 k_max(g::KWaveGrid2D) = min(π / g.dx, π / g.dy)
@@ -289,6 +309,13 @@ Compute the time array for the simulation based on the CFL stability condition.
 - `sound_speed`: Maximum sound speed in the medium [m/s] (scalar or array)
 - `cfl`: CFL number (default: 0.3, must be ≤ 1 for stability)
 - `t_end`: End time [s] (if nothing, computed from grid diagonal / sound speed)
+
+# Notes
+Modifies `grid.dt[]`, `grid.Nt[]`, and `grid.t_array` in-place.
+Pass `maximum(medium.sound_speed)` as `sound_speed` for heterogeneous media.
+
+# See Also
+[`KWaveGrid`](@ref), [`kspace_first_order`](@ref), [`k_max`](@ref)
 """
 function make_time!(grid::AbstractKWaveGrid, sound_speed; cfl::Float64=0.3, t_end::Union{Nothing, Float64}=nothing)
     # Get maximum sound speed

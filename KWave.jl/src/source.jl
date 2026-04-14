@@ -36,7 +36,25 @@ end
 """
     KWaveSource(; p0=nothing, kwargs...)
 
-Create a KWaveSource with Float64 values by default.
+Create a KWaveSource. All array inputs are converted to `Float64`.
+
+# Keyword Arguments
+- `p0`: Initial pressure distribution (photoacoustic / IVP source)
+- `p_mask`: Binary `BitArray` mask for time-varying pressure source locations
+- `p`: Pressure time series — `(n_sources × Nt)` or `(n_sources × 1)` for steady-state
+- `p_mode`: Source injection mode (default: `Additive`)
+- `u_mask`: Binary mask for velocity source locations
+- `ux`, `uy`, `uz`: Velocity component time series — `(n_sources × Nt)`
+- `u_mode`: Velocity source injection mode (default: `Additive`)
+
+# Notes
+- `p0` and time-varying sources (`p_mask`/`p`) can coexist in the same simulation.
+- For a single source point, `p` should be a `(1 × Nt)` matrix (not a vector).
+- Use [`KWaveArray`](@ref) with [`get_distributed_source_signal`](@ref) for multi-element arrays.
+
+# See Also
+[`KWaveSensor`](@ref), [`SourceMode`](@ref), [`tone_burst`](@ref),
+[`KWaveArray`](@ref), [`kspace_first_order`](@ref)
 """
 function KWaveSource(; p0::Union{Nothing, AbstractArray{<:Real}}=nothing,
                      p_mask::Union{Nothing, AbstractArray{Bool}}=nothing,

@@ -1,0 +1,10 @@
+[deps]
+Documenter = "e30172f5-a6a5-5a46-863b-614d45cd2de4"
+KWave = "6515db03-cc09-4e48-9b6f-9f8a641b1330"
+
+[sources]
+KWave = {path = ".."}
+
+[compat]
+Documenter = "1"
+julia = "1.10"

@@ -8,13 +8,25 @@
 Sensor/detector definitions for k-Wave simulations.
 
 # Fields
-- `mask`: Binary mask (record at grid points where true), Cartesian coordinates,
-  or `nothing` (record entire field)
-- `record`: Vector of symbols specifying which fields to record:
-  `:p`, `:p_max`, `:p_min`, `:p_rms`, `:p_final`,
-  `:ux`, `:uy`, `:uz`, `:u_max`, `:u_rms`, `:u_final`,
-  `:I_avg`, `:I_max`
-- `time_reversal_boundary_data`: Sensor data for time-reversal reconstruction
+- `mask`: Recording locations — `BitArray` (grid mask), `Matrix{Float64}` (Cartesian coords),
+  or `nothing` (record entire pressure field — memory-intensive)
+- `record`: Vector of symbols for fields to record (default: `[:p]`).
+  Valid values: `:p`, `:p_max`, `:p_min`, `:p_rms`, `:p_final`,
+  `:ux`, `:uy`, `:uz`, `:u_max`, `:u_rms`, `:u_final`, `:I_avg`, `:I_max`
+- `time_reversal_boundary_data`: Sensor data for time-reversal reconstruction (sets
+  `is_time_reversal(sensor) == true`)
+- `directivity_angle`: Sensor element directivity angles [rad] (optional)
+- `directivity_size`: Sensor element size for directivity calculation [m] (optional)
+- `frequency_response`: `(f_centre, bandwidth)` bandpass response tuple (optional)
+
+# Notes
+- `mask=nothing` records the entire pressure field at every step. Use only for small grids
+  or combine with `:p_final` / `:p_max` to reduce memory.
+- Cartesian `mask` coordinates are in metres; use [`cart2grid`](@ref) to convert manually.
+
+# See Also
+[`KWaveSource`](@ref), [`SimulationOutput`](@ref), [`is_time_reversal`](@ref),
+[`cart2grid`](@ref), [`kspace_first_order`](@ref)
 """
 Base.@kwdef struct KWaveSensor
     mask::Union{Nothing, AbstractArray{Bool}, AbstractMatrix{Float64}} = nothing
