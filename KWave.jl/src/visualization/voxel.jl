@@ -95,6 +95,10 @@ function max_intensity_projection(volume::AbstractArray{<:Real, 3};
                                   db_range::Real=40,
                                   colormap=nothing)
     if dims === nothing
+        if !hasmethod(_plot_max_intensity_projection, (AbstractArray{<:Real, 3},))
+            @warn "max_intensity_projection requires a Makie backend (GLMakie or CairoMakie). Load one first."
+            return nothing
+        end
         return _plot_max_intensity_projection(volume; colormap=colormap)
     elseif dims == :all
         mip_xy = dropdims(maximum(abs, volume; dims=3); dims=3)
@@ -115,11 +119,8 @@ function max_intensity_projection(volume::AbstractArray{<:Real, 3};
     end
 end
 
-function _plot_max_intensity_projection(volume::AbstractArray{<:Real, 3};
-                                        colormap=nothing)
-    @warn "max_intensity_projection requires a Makie backend (GLMakie or CairoMakie). Load one first."
-    return nothing
-end
+"""Plot max intensity projection — implemented by Makie extensions."""
+function _plot_max_intensity_projection end
 
 """Apply dB scaling to a field, clamping to db_range below maximum."""
 function _apply_db_scale(field::AbstractArray, db_range::Real)
