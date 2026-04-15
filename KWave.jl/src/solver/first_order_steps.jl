@@ -7,18 +7,21 @@
 # ============================================================================
 
 """
-    AbsorptionParams
+    AbsorptionParams{T,A}
 
 Pre-computed absorption and dispersion parameters for the equation of state.
 Following the k-Wave formulation (Treeby & Cox, 2010):
 - `absorb_tau`: scalar absorption prefactor
 - `absorb_eta`: scalar dispersion prefactor
-- `absorb_nabla1`: k-space operator k^y (fractional Laplacian for absorption)
-- `absorb_nabla2`: k-space operator k^(y-1) (fractional Laplacian for dispersion)
+- `absorb_nabla1`: k-space operator k^y  (may be full-grid or rfft-shaped)
+- `absorb_nabla2`: k-space operator k^(y-1)
+
+`T` is the floating-point working precision; `A` is the array type of the
+nabla operators (either full-grid or rfft-truncated).
 """
-struct AbsorptionParams{A<:AbstractArray}
-    absorb_tau::Float64           # -2 * alpha_nepers * c_ref^(y-1)
-    absorb_eta::Float64           # 2 * alpha_nepers * c_ref^(y-1) * tan(π*y/2)
+struct AbsorptionParams{T<:AbstractFloat, A<:AbstractArray{T}}
+    absorb_tau::T                 # -2 * alpha_nepers * c_ref^(y-1)
+    absorb_eta::T                 # 2 * alpha_nepers * c_ref^(y-1) * tan(π*y/2)
     absorb_nabla1::A              # k^y
     absorb_nabla2::A              # k^(y-1)
     mode::Symbol                  # :no_absorption, :no_dispersion, :stokes
@@ -52,16 +55,17 @@ end
 # 1D: Initialize from p0
 # ============================================================================
 
-function initialize_p0_1d!(p::Vector{Float64}, ux::Vector{Float64},
-                           rhox::Vector{Float64},
+function initialize_p0_1d!(p::AbstractVector, ux::AbstractVector,
+                           rhox::AbstractVector,
                            source::KWaveSource, kgrid::KWaveGrid1D, medium::KWaveMedium,
-                           plans::FFTPlans, scratch::Vector{ComplexF64},
+                           plans::FFTPlans, scratch::AbstractVector{<:Complex},
                            smooth_p0::Bool)
     if !has_p0(source)
         return
     end
 
-    p0 = Float64.(source.p0)
+    FT = eltype(p)
+    p0 = FT.(source.p0)
 
     if smooth_p0 && kgrid.Nx > 4
         p0 = smooth(p0; restore_max=true)
@@ -90,16 +94,17 @@ end
 # 2D: Initialize from p0
 # ============================================================================
 
-function initialize_p0_2d!(p::Matrix{Float64}, ux::Matrix{Float64}, uy::Matrix{Float64},
-                           rhox::Matrix{Float64}, rhoy::Matrix{Float64},
+function initialize_p0_2d!(p::AbstractMatrix, ux::AbstractMatrix, uy::AbstractMatrix,
+                           rhox::AbstractMatrix, rhoy::AbstractMatrix,
                            source::KWaveSource, kgrid::KWaveGrid2D, medium::KWaveMedium,
-                           plans::FFTPlans, scratch::Matrix{ComplexF64},
+                           plans::FFTPlans, scratch::AbstractMatrix{<:Complex},
                            smooth_p0::Bool)
     if !has_p0(source)
         return
     end
 
-    p0 = Float64.(source.p0)
+    FT = eltype(p)
+    p0 = FT.(source.p0)
 
     if smooth_p0 && kgrid.Nx > 1 && kgrid.Ny > 1
         p0 = smooth(p0; restore_max=true)
@@ -135,17 +140,19 @@ end
 # 3D: Initialize from p0
 # ============================================================================
 
-function initialize_p0_3d!(p::Array{Float64,3}, ux::Array{Float64,3},
-                           uy::Array{Float64,3}, uz::Array{Float64,3},
-                           rhox::Array{Float64,3}, rhoy::Array{Float64,3}, rhoz::Array{Float64,3},
+function initialize_p0_3d!(p::AbstractArray{<:Real,3}, ux::AbstractArray{<:Real,3},
+                           uy::AbstractArray{<:Real,3}, uz::AbstractArray{<:Real,3},
+                           rhox::AbstractArray{<:Real,3}, rhoy::AbstractArray{<:Real,3},
+                           rhoz::AbstractArray{<:Real,3},
                            source::KWaveSource, kgrid::KWaveGrid3D, medium::KWaveMedium,
-                           plans::FFTPlans, scratch::Array{ComplexF64,3},
+                           plans::FFTPlans, scratch::AbstractArray{<:Complex,3},
                            smooth_p0::Bool)
     if !has_p0(source)
         return
     end
 
-    p0 = Float64.(source.p0)
+    FT = eltype(p)
+    p0 = FT.(source.p0)
 
     if smooth_p0 && kgrid.Nx > 1 && kgrid.Ny > 1 && kgrid.Nz > 1
         p0 = smooth(p0; restore_max=true)
@@ -191,87 +198,94 @@ end
 Compute pressure from equation of state with k-space correction,
 optional absorption, and optional nonlinearity.
 
-For the absorbing case, uses the k-Wave formulation (Treeby & Cox, 2010)
-applied in the frequency domain:
-  p_hat = c₀² · κ · (1 + absorb_nabla1) · ρ_hat
-where absorb_nabla1 = τ·k^y (pre-multiplied in precomputation).
+Uses rfft/irfft (real-to-complex): `scratch1` and `scratch2` are complex
+arrays of shape `plans.rfft_dims` (first dim = Nx÷2+1), and `kappa_r` /
+`absorb.absorb_nabla1/2` must already be rfft-truncated to that shape.
 
+For the absorbing case, uses the k-Wave formulation (Treeby & Cox, 2010):
+  p_hat = c₀² · κ · (1 + absorb_nabla1) · rfft(ρ)
 For dispersion, additionally subtracts:
-  c₀² · κ · absorb_nabla2 · (ρ_hat - ρ_hat_prev) / dt
+  c₀² · κ · absorb_nabla2 · rfft((ρ - ρ_prev) / dt)
 
-`rho_total_prev` is the total density from the previous time step (for dispersion).
+`tmp_real` is a pre-allocated real scratch of the same shape as `rho_total`
+(full grid size). It is used for staging heterogeneous and dispersion
+computations without allocating inside the hot loop.
 """
 function _compute_pressure!(
-    p::AbstractArray,
-    rho_total::AbstractArray,
-    rho_total_prev::Union{Nothing, AbstractArray},
-    scratch1::AbstractArray{<:Complex},
-    scratch2::AbstractArray{<:Complex},
-    kappa::AbstractArray,
+    p::AbstractArray{T},
+    rho_total::AbstractArray{T},
+    rho_total_prev::Union{Nothing, AbstractArray{T}},
+    scratch1::AbstractArray{Complex{T}},   # rfft-shaped: (Nx÷2+1, …)
+    scratch2::AbstractArray{Complex{T}},   # rfft-shaped: (Nx÷2+1, …)
+    tmp_real::AbstractArray{T},            # full grid shape, real scratch
+    kappa_r::AbstractArray{T},             # rfft-shaped kappa
     c0,     # scalar or array
     rho0,   # scalar or array (density for nonlinear term)
     BonA,   # nothing or scalar or array
     absorb::Union{Nothing, AbsorptionParams},
     plans::FFTPlans,
-    dt::Float64,
-)
+    dt::Real,
+) where T <: AbstractFloat
     is_absorbing = absorb !== nothing && absorb.mode != :no_absorption
     is_nonlinear = BonA !== nothing
 
-    # Choose the effective density (with nonlinear correction if needed)
-    rho_eff = if is_nonlinear
-        @. rho_total * (1 + BonA / 2 * rho_total / rho0)
-    else
-        rho_total
-    end
-
     if c0 isa Real
-        c_sq = c0^2
+        c_sq = T(c0)^2
 
-        # FFT of effective density
-        scratch1 .= complex.(rho_eff)
-        plans.forward * scratch1
+        # rfft of effective density → scratch1
+        if is_nonlinear
+            @. tmp_real = rho_total * (1 + BonA / 2 * rho_total / rho0)
+            mul!(scratch1, plans.forward, tmp_real)
+        else
+            mul!(scratch1, plans.forward, rho_total)
+        end
 
         if !is_absorbing
-            # Lossless: p = c0^2 * IFFT(kappa * FFT(rho))
-            @. scratch1 = c_sq * kappa * scratch1
+            # Lossless: p = irfft( c0² · κ · rfft(ρ) )
+            @. scratch1 = c_sq * kappa_r * scratch1
+
         elseif absorb.mode == :no_dispersion || rho_total_prev === nothing
             # Absorption only (no dispersion):
-            # p = c0^2 * IFFT(kappa * (1 + nabla1) * FFT(rho))
-            @. scratch1 = c_sq * kappa * (1 + absorb.absorb_nabla1) * scratch1
+            # p = irfft( c0² · κ · (1 + nabla1) · rfft(ρ) )
+            @. scratch1 = c_sq * kappa_r * (1 + absorb.absorb_nabla1) * scratch1
+
         else
             # Full absorption + dispersion:
-            # p = c0^2 * IFFT(kappa * ((1 + nabla1) * FFT(rho) - nabla2 * FFT(drho/dt)))
-            rho_eff_prev = if is_nonlinear
-                @. rho_total_prev * (1 + BonA / 2 * rho_total_prev / rho0)
+            # p = irfft( c0² · κ · ((1+nabla1)·rfft(ρ) − nabla2·rfft((ρ−ρ_prev)/dt)) )
+            if is_nonlinear
+                # tmp_real currently has rho_eff; compute (rho_eff - rho_eff_prev)/dt
+                # rho_eff_prev allocation is unavoidable in the nonlinear+dispersion case
+                rho_eff_prev = @. rho_total_prev * (1 + BonA / 2 * rho_total_prev / rho0)
+                @. tmp_real = (tmp_real - rho_eff_prev) / dt
             else
-                rho_total_prev
+                @. tmp_real = (rho_total - rho_total_prev) / dt
             end
-            @. scratch2 = complex((rho_eff - rho_eff_prev) / dt)
-            plans.forward * scratch2
-            @. scratch1 = c_sq * kappa * (
+            mul!(scratch2, plans.forward, tmp_real)
+            @. scratch1 = c_sq * kappa_r * (
                 (1 + absorb.absorb_nabla1) * scratch1
                 - absorb.absorb_nabla2 * scratch2
             )
         end
 
-        plans.inverse * scratch1
-        @. p = real(scratch1)
+        # irfft writes directly to p (real output, full grid shape)
+        mul!(p, plans.inverse, scratch1)
 
     else
-        # For heterogeneous media: fused c^2 * rho multiply — zero intermediate allocations
-        @. scratch1 = complex(c0^2 * rho_eff)
-        plans.forward * scratch1
+        # Heterogeneous media: fuse c² · ρ_eff into tmp_real, then rfft
+        if is_nonlinear
+            @. tmp_real = c0^2 * rho_total * (1 + BonA / 2 * rho_total / rho0)
+        else
+            @. tmp_real = c0^2 * rho_total
+        end
+        mul!(scratch1, plans.forward, tmp_real)
 
         if !is_absorbing
-            @. scratch1 = kappa * scratch1
+            @. scratch1 = kappa_r * scratch1
         else
-            # Use mean c_ref for absorption (already in absorb_nabla1 via precomputation)
-            @. scratch1 = kappa * (1 + absorb.absorb_nabla1) * scratch1
+            @. scratch1 = kappa_r * (1 + absorb.absorb_nabla1) * scratch1
         end
 
-        plans.inverse * scratch1
-        @. p = real(scratch1)
+        mul!(p, plans.inverse, scratch1)
     end
 end
 
@@ -280,24 +294,25 @@ end
 # ============================================================================
 
 function time_step_1d!(
-    p::Vector{Float64},
-    ux::Vector{Float64},
-    rhox::Vector{Float64},
-    scratch1::Vector{ComplexF64},
-    scratch2::Vector{ComplexF64},
-    dpdx::Vector{Float64},                              # pre-allocated pressure gradient
-    duxdx::Vector{Float64},                             # pre-allocated velocity divergence
+    p::AbstractVector,
+    ux::AbstractVector,
+    rhox::AbstractVector,
+    scratch1::AbstractVector{<:Complex},
+    scratch2::AbstractVector{<:Complex},
+    dpdx::AbstractVector,                               # pre-allocated pressure gradient
+    duxdx::AbstractVector,                              # pre-allocated velocity divergence
     kgrid::KWaveGrid1D,
     medium::KWaveMedium,
     source::KWaveSource,
-    pml_x::Vector{Float64},
-    pml_x_sgx::Vector{Float64},
-    kappa::Vector{Float64},
+    pml_x::AbstractVector,
+    pml_x_sgx::AbstractVector,
+    kappa_r::AbstractVector,                            # rfft-shaped kappa
     plans::FFTPlans,
     t_index::Int,
     absorb::Union{Nothing, AbsorptionParams},
-    rho_total_prev::Union{Nothing, Vector{Float64}}=nothing,
-    rho0_sgx::Union{Nothing, Vector{Float64}}=nothing,  # pre-computed staggered density
+    tmp_real::AbstractVector,                           # full-grid real scratch
+    rho_total_prev::Union{Nothing, AbstractVector}=nothing,
+    rho0_sgx::Union{Nothing, AbstractVector}=nothing,  # pre-computed staggered density
 )
     dt = kgrid.dt[]
     c0 = medium.sound_speed
@@ -333,7 +348,7 @@ function time_step_1d!(
     rho_total = rhox
 
     _compute_pressure!(p, rho_total, rho_total_prev,
-                       scratch1, scratch2, kappa,
+                       scratch1, scratch2, tmp_real, kappa_r,
                        c0, rho0, medium.BonA, absorb, plans, dt)
 
     # Update rho_total_prev for dispersion
@@ -347,18 +362,18 @@ end
 # ============================================================================
 
 function time_step_2d!(
-    p::Matrix{Float64},
-    ux::Matrix{Float64},
-    uy::Matrix{Float64},
-    rhox::Matrix{Float64},
-    rhoy::Matrix{Float64},
-    scratch1::Matrix{ComplexF64},
-    scratch2::Matrix{ComplexF64},
-    dpdx::Matrix{Float64},                              # pre-allocated pressure gradient x
-    dpdy::Matrix{Float64},                              # pre-allocated pressure gradient y
-    duxdx::Matrix{Float64},                             # pre-allocated velocity divergence x
-    duydy::Matrix{Float64},                             # pre-allocated velocity divergence y
-    rho_total::Matrix{Float64},                         # pre-allocated density sum buffer
+    p::AbstractMatrix,
+    ux::AbstractMatrix,
+    uy::AbstractMatrix,
+    rhox::AbstractMatrix,
+    rhoy::AbstractMatrix,
+    scratch1::AbstractMatrix{<:Complex},
+    scratch2::AbstractMatrix{<:Complex},
+    dpdx::AbstractMatrix,                               # pre-allocated pressure gradient x
+    dpdy::AbstractMatrix,                               # pre-allocated pressure gradient y
+    duxdx::AbstractMatrix,                              # pre-allocated velocity divergence x
+    duydy::AbstractMatrix,                              # pre-allocated velocity divergence y
+    rho_total::AbstractMatrix,                          # pre-allocated density sum buffer
     kgrid::KWaveGrid2D,
     medium::KWaveMedium,
     source::KWaveSource,
@@ -366,13 +381,14 @@ function time_step_2d!(
     pml_y_row,                                          # pre-reshaped PML (1×Ny)
     pml_x_sgx_col,                                      # pre-reshaped staggered PML (Nx×1)
     pml_y_sgy_row,                                      # pre-reshaped staggered PML (1×Ny)
-    kappa::Matrix{Float64},
+    kappa_r::AbstractMatrix,                            # rfft-shaped kappa
     plans::FFTPlans,
     t_index::Int,
     absorb::Union{Nothing, AbsorptionParams}=nothing,
-    rho_total_prev::Union{Nothing, Matrix{Float64}}=nothing,
-    rho0_sgx::Union{Nothing, Matrix{Float64}}=nothing,  # pre-computed staggered density x
-    rho0_sgy::Union{Nothing, Matrix{Float64}}=nothing,  # pre-computed staggered density y
+    tmp_real::Union{Nothing, AbstractMatrix}=nothing,   # full-grid real scratch
+    rho_total_prev::Union{Nothing, AbstractMatrix}=nothing,
+    rho0_sgx::Union{Nothing, AbstractMatrix}=nothing,  # pre-computed staggered density x
+    rho0_sgy::Union{Nothing, AbstractMatrix}=nothing,  # pre-computed staggered density y
 )
     dt = kgrid.dt[]
     c0 = medium.sound_speed
@@ -413,7 +429,7 @@ function time_step_2d!(
     @. rho_total = rhox + rhoy
 
     _compute_pressure!(p, rho_total, rho_total_prev,
-                      scratch1, scratch2, kappa,
+                      scratch1, scratch2, tmp_real, kappa_r,
                       c0, rho0, medium.BonA, absorb, plans, dt)
 
     # Update rho_total_prev for dispersion
@@ -427,39 +443,40 @@ end
 # ============================================================================
 
 function time_step_3d!(
-    p::Array{Float64,3},
-    ux::Array{Float64,3},
-    uy::Array{Float64,3},
-    uz::Array{Float64,3},
-    rhox::Array{Float64,3},
-    rhoy::Array{Float64,3},
-    rhoz::Array{Float64,3},
-    scratch1::Array{ComplexF64,3},
-    scratch2::Array{ComplexF64,3},
-    dpdx::Array{Float64,3},                             # pre-allocated pressure gradient x
-    dpdy::Array{Float64,3},                             # pre-allocated pressure gradient y
-    dpdz::Array{Float64,3},                             # pre-allocated pressure gradient z
-    duxdx::Array{Float64,3},                            # pre-allocated velocity divergence x
-    duydy::Array{Float64,3},                            # pre-allocated velocity divergence y
-    duzdz::Array{Float64,3},                            # pre-allocated velocity divergence z
-    rho_total::Array{Float64,3},                        # pre-allocated density sum buffer
+    p::AbstractArray{<:Real,3},
+    ux::AbstractArray{<:Real,3},
+    uy::AbstractArray{<:Real,3},
+    uz::AbstractArray{<:Real,3},
+    rhox::AbstractArray{<:Real,3},
+    rhoy::AbstractArray{<:Real,3},
+    rhoz::AbstractArray{<:Real,3},
+    scratch1::AbstractArray{<:Complex,3},
+    scratch2::AbstractArray{<:Complex,3},
+    dpdx::AbstractArray{<:Real,3},                     # pre-allocated pressure gradient x
+    dpdy::AbstractArray{<:Real,3},                     # pre-allocated pressure gradient y
+    dpdz::AbstractArray{<:Real,3},                     # pre-allocated pressure gradient z
+    duxdx::AbstractArray{<:Real,3},                    # pre-allocated velocity divergence x
+    duydy::AbstractArray{<:Real,3},                    # pre-allocated velocity divergence y
+    duzdz::AbstractArray{<:Real,3},                    # pre-allocated velocity divergence z
+    rho_total::AbstractArray{<:Real,3},                # pre-allocated density sum buffer
     kgrid::KWaveGrid3D,
     medium::KWaveMedium,
     source::KWaveSource,
-    pml_x_r,                                            # pre-reshaped PML (Nx×1×1)
-    pml_y_r,                                            # pre-reshaped PML (1×Ny×1)
-    pml_z_r,                                            # pre-reshaped PML (1×1×Nz)
-    pml_x_sgx_r,                                        # pre-reshaped staggered PML (Nx×1×1)
-    pml_y_sgy_r,                                        # pre-reshaped staggered PML (1×Ny×1)
-    pml_z_sgz_r,                                        # pre-reshaped staggered PML (1×1×Nz)
-    kappa::Array{Float64,3},
+    pml_x_r,                                           # pre-reshaped PML (Nx×1×1)
+    pml_y_r,                                           # pre-reshaped PML (1×Ny×1)
+    pml_z_r,                                           # pre-reshaped PML (1×1×Nz)
+    pml_x_sgx_r,                                       # pre-reshaped staggered PML (Nx×1×1)
+    pml_y_sgy_r,                                       # pre-reshaped staggered PML (1×Ny×1)
+    pml_z_sgz_r,                                       # pre-reshaped staggered PML (1×1×Nz)
+    kappa_r::AbstractArray{<:Real,3},                  # rfft-shaped kappa
     plans::FFTPlans,
     t_index::Int,
     absorb::Union{Nothing, AbsorptionParams}=nothing,
-    rho_total_prev::Union{Nothing, Array{Float64,3}}=nothing,
-    rho0_sgx::Union{Nothing, Array{Float64,3}}=nothing, # pre-computed staggered density x
-    rho0_sgy::Union{Nothing, Array{Float64,3}}=nothing, # pre-computed staggered density y
-    rho0_sgz::Union{Nothing, Array{Float64,3}}=nothing, # pre-computed staggered density z
+    tmp_real::Union{Nothing, AbstractArray{<:Real,3}}=nothing,  # full-grid real scratch
+    rho_total_prev::Union{Nothing, AbstractArray{<:Real,3}}=nothing,
+    rho0_sgx::Union{Nothing, AbstractArray{<:Real,3}}=nothing, # pre-computed staggered density x
+    rho0_sgy::Union{Nothing, AbstractArray{<:Real,3}}=nothing, # pre-computed staggered density y
+    rho0_sgz::Union{Nothing, AbstractArray{<:Real,3}}=nothing, # pre-computed staggered density z
 )
     dt = kgrid.dt[]
     c0 = medium.sound_speed
@@ -505,7 +522,7 @@ function time_step_3d!(
     @. rho_total = rhox + rhoy + rhoz
 
     _compute_pressure!(p, rho_total, rho_total_prev,
-                      scratch1, scratch2, kappa,
+                      scratch1, scratch2, tmp_real, kappa_r,
                       c0, rho0, medium.BonA, absorb, plans, dt)
 
     # Update rho_total_prev for dispersion

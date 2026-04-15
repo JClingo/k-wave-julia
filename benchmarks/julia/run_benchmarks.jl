@@ -5,14 +5,22 @@ Benchmarks full simulations (1D / 2D / 3D) and FFT component throughput
 for both Float64 and Float32 on CPU.
 
 Usage:
-    julia --project=benchmarks/julia benchmarks/julia/run_benchmarks.jl
+    # Run with all CPU threads (STRONGLY RECOMMENDED — gives 4-8x FFT speedup)
+    julia -t auto --project=benchmarks/julia benchmarks/julia/run_benchmarks.jl
+
+    # Explicit thread count (replace N with desired number)
+    julia -t N --project=benchmarks/julia benchmarks/julia/run_benchmarks.jl
 
     # Override sample count:
-    BENCH_SAMPLES=10 julia --project=benchmarks/julia benchmarks/julia/run_benchmarks.jl
+    BENCH_SAMPLES=10 julia -t auto --project=benchmarks/julia benchmarks/julia/run_benchmarks.jl
 
 Results are written to:
     benchmarks/results/julia/full_simulations.csv
     benchmarks/results/julia/fft_components.csv
+
+Note: FFTW multi-threading is set to Threads.nthreads() inside create_fft_plans.
+Running with a single Julia thread (no -t flag) pins FFT to 1 thread and will
+show severely degraded 2D/3D performance vs MATLAB.
 """
 
 using Pkg
@@ -42,13 +50,23 @@ const RHO0      = 1000.0 # kg/m³
 const RESULTS_DIR = joinpath(@__DIR__, "..", "results", "julia")
 mkpath(RESULTS_DIR)
 
+# Apply FFTW threading at startup so the planning stage also uses multiple threads.
+# create_fft_plans() also calls this, but setting it here ensures the benchmark
+# header prints the correct thread count before any plan is created.
+FFTW.set_num_threads(Threads.nthreads())
+
 println("=" ^ 65)
 println("KWave.jl CPU Benchmark Suite")
 println("Julia:        $(VERSION)")
-println("FFTW threads: $(FFTW.get_num_threads())")
+println("Julia threads: $(Threads.nthreads())")
+println("FFTW threads:  $(FFTW.get_num_threads())")
 println("Date:         $(now())")
 println("N_WARMUP=$N_WARMUP  N_SAMPLES=$N_SAMPLES")
 println("=" ^ 65)
+
+if Threads.nthreads() == 1
+    @warn "Running with 1 Julia thread. Re-run with `julia -t auto` for multi-threaded FFT performance."
+end
 
 # ─────────────────────────────────────────────────────────────
 # Scenario descriptor

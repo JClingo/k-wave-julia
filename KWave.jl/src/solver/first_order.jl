@@ -146,36 +146,50 @@ function kspace_first_order(
     pml_x_sgx = get_pml(Nx, kgrid.dx, pml_size, pml_alpha, dt; staggered=true)
 
     # ================================================================
-    # 4. Pre-compute k-space correction and absorption
-    # ================================================================
-    c_ref = medium.sound_speed isa Real ? medium.sound_speed : mean(medium.sound_speed)
-    kappa = _compute_kappa(kgrid.k, c_ref, dt)
-    absorb = _precompute_absorption(medium, kgrid.k, c_ref)
-
-    # ================================================================
-    # 5. Create FFT plans
+    # 4. Create FFT plans and pre-compute spectral operators
     # ================================================================
     plans = create_fft_plans(kgrid; data_cast=T)
+    n1    = rfft_first_dim(plans)   # = Nx÷2+1
+
+    c_ref = medium.sound_speed isa Real ? medium.sound_speed : mean(medium.sound_speed)
+
+    # rfft-shaped, T-typed kappa (spectral k-space correction factor)
+    kappa_r = T.(_compute_kappa(kgrid.k, c_ref, dt))[1:n1]
+
+    # rfft-sliced, T-typed absorption params (or nothing for lossless media)
+    _absorb_f64 = _precompute_absorption(medium, kgrid.k, c_ref)
+    absorb_r = if _absorb_f64 !== nothing
+        AbsorptionParams(T(_absorb_f64.absorb_tau), T(_absorb_f64.absorb_eta),
+                         T.(_absorb_f64.absorb_nabla1)[1:n1],
+                         T.(_absorb_f64.absorb_nabla2)[1:n1],
+                         _absorb_f64.mode)
+    else
+        nothing
+    end
 
     # ================================================================
-    # 6. Allocate field arrays
+    # 5. Allocate field arrays (all in working precision T)
     # ================================================================
-    p    = zeros(Float64, Nx)
-    ux   = zeros(Float64, Nx)
-    rhox = zeros(Float64, Nx)
-    scratch1 = zeros(ComplexF64, Nx)
-    scratch2 = zeros(ComplexF64, Nx)
+    p    = zeros(T, Nx)
+    ux   = zeros(T, Nx)
+    rhox = zeros(T, Nx)
+
+    # rfft scratch: shape (Nx÷2+1,) — ~half the memory of a complex full-size array
+    scratch1 = zeros(Complex{T}, n1)
+    scratch2 = zeros(Complex{T}, n1)
 
     # Pre-allocated scratch buffers — eliminates per-step allocations in hot loop
-    dpdx  = zeros(Float64, Nx)
-    duxdx = zeros(Float64, Nx)
+    dpdx     = zeros(T, Nx)
+    duxdx    = zeros(T, Nx)
+    tmp_real = zeros(T, Nx)   # real staging buffer for _compute_pressure!
 
     # Pre-compute staggered density for heterogeneous media (time-invariant)
-    rho0_sgx_1d = medium.density isa AbstractArray ? _stagger_density_1d(medium.density) : nothing
+    rho0_sgx_1d = medium.density isa AbstractArray ?
+        T.(_stagger_density_1d(medium.density)) : nothing
 
     # For dispersion: track previous total density
-    rho_total_prev = (absorb !== nothing && absorb.mode != :no_dispersion) ?
-        zeros(Float64, Nx) : nothing
+    rho_total_prev = (absorb_r !== nothing && absorb_r.mode != :no_dispersion) ?
+        zeros(T, Nx) : nothing
 
     # ================================================================
     # 7. Sensor data
@@ -231,8 +245,8 @@ function kspace_first_order(
             dpdx, duxdx,
             kgrid, medium, source,
             pml_x, pml_x_sgx,
-            kappa, plans, t_index,
-            absorb, rho_total_prev,
+            kappa_r, plans, t_index,
+            absorb_r, tmp_real, rho_total_prev,
             rho0_sgx_1d,
         )
 
@@ -335,34 +349,47 @@ function kspace_first_order(
     pml_y_sgy = get_pml(Ny, kgrid.dy, pml_y_size, pml_y_alpha, dt; staggered=true)
 
     # ================================================================
-    # 4. Pre-compute k-space correction and absorption
-    # ================================================================
-    c_ref = medium.sound_speed isa Real ? medium.sound_speed : mean(medium.sound_speed)
-    kappa = _compute_kappa(kgrid.k, c_ref, dt)
-    absorb = _precompute_absorption(medium, kgrid.k, c_ref)
-
-    # ================================================================
-    # 5. Create FFT plans
+    # 4. Create FFT plans and pre-compute spectral operators
     # ================================================================
     plans = create_fft_plans(kgrid; data_cast=T)
+    n1    = rfft_first_dim(plans)   # = Nx÷2+1
+
+    c_ref = medium.sound_speed isa Real ? medium.sound_speed : mean(medium.sound_speed)
+
+    # rfft-shaped, T-typed kappa
+    kappa_r = T.(_compute_kappa(kgrid.k, c_ref, dt))[1:n1, :]
+
+    # rfft-sliced, T-typed absorption params
+    _absorb_f64 = _precompute_absorption(medium, kgrid.k, c_ref)
+    absorb_r = if _absorb_f64 !== nothing
+        AbsorptionParams(T(_absorb_f64.absorb_tau), T(_absorb_f64.absorb_eta),
+                         T.(_absorb_f64.absorb_nabla1)[1:n1, :],
+                         T.(_absorb_f64.absorb_nabla2)[1:n1, :],
+                         _absorb_f64.mode)
+    else
+        nothing
+    end
 
     # ================================================================
-    # 6. Allocate field arrays
+    # 5. Allocate field arrays (all in working precision T)
     # ================================================================
-    p    = zeros(Float64, Nx, Ny)
-    ux   = zeros(Float64, Nx, Ny)
-    uy   = zeros(Float64, Nx, Ny)
-    rhox = zeros(Float64, Nx, Ny)
-    rhoy = zeros(Float64, Nx, Ny)
-    scratch1 = zeros(ComplexF64, Nx, Ny)
-    scratch2 = zeros(ComplexF64, Nx, Ny)
+    p    = zeros(T, Nx, Ny)
+    ux   = zeros(T, Nx, Ny)
+    uy   = zeros(T, Nx, Ny)
+    rhox = zeros(T, Nx, Ny)
+    rhoy = zeros(T, Nx, Ny)
+
+    # rfft scratch: shape (Nx÷2+1, Ny) — saves ~half the complex memory
+    scratch1  = zeros(Complex{T}, n1, Ny)
+    scratch2  = zeros(Complex{T}, n1, Ny)
 
     # Pre-allocated scratch buffers — eliminates per-step allocations in hot loop
-    dpdx      = zeros(Float64, Nx, Ny)
-    dpdy      = zeros(Float64, Nx, Ny)
-    duxdx     = zeros(Float64, Nx, Ny)
-    duydy     = zeros(Float64, Nx, Ny)
-    rho_total = zeros(Float64, Nx, Ny)
+    dpdx      = zeros(T, Nx, Ny)
+    dpdy      = zeros(T, Nx, Ny)
+    duxdx     = zeros(T, Nx, Ny)
+    duydy     = zeros(T, Nx, Ny)
+    rho_total = zeros(T, Nx, Ny)
+    tmp_real  = zeros(T, Nx, Ny)   # real staging buffer for _compute_pressure!
 
     # Pre-reshape PML vectors — eliminates per-step wrapper object allocations
     pml_x_col     = reshape(pml_x,     :, 1)
@@ -371,11 +398,13 @@ function kspace_first_order(
     pml_y_sgy_row = reshape(pml_y_sgy, 1, :)
 
     # Pre-compute staggered density for heterogeneous media (time-invariant)
-    rho0_sgx_2d = medium.density isa AbstractArray ? _stagger_density_2d(medium.density, 1) : nothing
-    rho0_sgy_2d = medium.density isa AbstractArray ? _stagger_density_2d(medium.density, 2) : nothing
+    rho0_sgx_2d = medium.density isa AbstractArray ?
+        T.(_stagger_density_2d(medium.density, 1)) : nothing
+    rho0_sgy_2d = medium.density isa AbstractArray ?
+        T.(_stagger_density_2d(medium.density, 2)) : nothing
 
-    rho_total_prev = (absorb !== nothing && absorb.mode != :no_dispersion) ?
-        zeros(Float64, Nx, Ny) : nothing
+    rho_total_prev = (absorb_r !== nothing && absorb_r.mode != :no_dispersion) ?
+        zeros(T, Nx, Ny) : nothing
 
     # ================================================================
     # 7. Sensor data
@@ -432,8 +461,8 @@ function kspace_first_order(
             dpdx, dpdy, duxdx, duydy, rho_total,
             kgrid, medium, source,
             pml_x_col, pml_y_row, pml_x_sgx_col, pml_y_sgy_row,
-            kappa, plans, t_index,
-            absorb, rho_total_prev,
+            kappa_r, plans, t_index,
+            absorb_r, tmp_real, rho_total_prev,
             rho0_sgx_2d, rho0_sgy_2d,
         )
 
@@ -538,38 +567,51 @@ function kspace_first_order(
     pml_z_sgz = get_pml(Nz, kgrid.dz, pml_z_size, pml_z_alpha, dt; staggered=true)
 
     # ================================================================
-    # 4. Pre-compute k-space correction and absorption
-    # ================================================================
-    c_ref = medium.sound_speed isa Real ? medium.sound_speed : mean(medium.sound_speed)
-    kappa = _compute_kappa(kgrid.k, c_ref, dt)
-    absorb = _precompute_absorption(medium, kgrid.k, c_ref)
-
-    # ================================================================
-    # 5. Create FFT plans
+    # 4. Create FFT plans and pre-compute spectral operators
     # ================================================================
     plans = create_fft_plans(kgrid; data_cast=T)
+    n1    = rfft_first_dim(plans)   # = Nx÷2+1
+
+    c_ref = medium.sound_speed isa Real ? medium.sound_speed : mean(medium.sound_speed)
+
+    # rfft-shaped, T-typed kappa
+    kappa_r = T.(_compute_kappa(kgrid.k, c_ref, dt))[1:n1, :, :]
+
+    # rfft-sliced, T-typed absorption params
+    _absorb_f64 = _precompute_absorption(medium, kgrid.k, c_ref)
+    absorb_r = if _absorb_f64 !== nothing
+        AbsorptionParams(T(_absorb_f64.absorb_tau), T(_absorb_f64.absorb_eta),
+                         T.(_absorb_f64.absorb_nabla1)[1:n1, :, :],
+                         T.(_absorb_f64.absorb_nabla2)[1:n1, :, :],
+                         _absorb_f64.mode)
+    else
+        nothing
+    end
 
     # ================================================================
-    # 6. Allocate field arrays
+    # 5. Allocate field arrays (all in working precision T)
     # ================================================================
-    p    = zeros(Float64, Nx, Ny, Nz)
-    ux   = zeros(Float64, Nx, Ny, Nz)
-    uy   = zeros(Float64, Nx, Ny, Nz)
-    uz   = zeros(Float64, Nx, Ny, Nz)
-    rhox = zeros(Float64, Nx, Ny, Nz)
-    rhoy = zeros(Float64, Nx, Ny, Nz)
-    rhoz = zeros(Float64, Nx, Ny, Nz)
-    scratch1 = zeros(ComplexF64, Nx, Ny, Nz)
-    scratch2 = zeros(ComplexF64, Nx, Ny, Nz)
+    p    = zeros(T, Nx, Ny, Nz)
+    ux   = zeros(T, Nx, Ny, Nz)
+    uy   = zeros(T, Nx, Ny, Nz)
+    uz   = zeros(T, Nx, Ny, Nz)
+    rhox = zeros(T, Nx, Ny, Nz)
+    rhoy = zeros(T, Nx, Ny, Nz)
+    rhoz = zeros(T, Nx, Ny, Nz)
+
+    # rfft scratch: shape (Nx÷2+1, Ny, Nz) — saves ~half the complex memory
+    scratch1  = zeros(Complex{T}, n1, Ny, Nz)
+    scratch2  = zeros(Complex{T}, n1, Ny, Nz)
 
     # Pre-allocated scratch buffers — eliminates per-step allocations in hot loop
-    dpdx      = zeros(Float64, Nx, Ny, Nz)
-    dpdy      = zeros(Float64, Nx, Ny, Nz)
-    dpdz      = zeros(Float64, Nx, Ny, Nz)
-    duxdx     = zeros(Float64, Nx, Ny, Nz)
-    duydy     = zeros(Float64, Nx, Ny, Nz)
-    duzdz     = zeros(Float64, Nx, Ny, Nz)
-    rho_total = zeros(Float64, Nx, Ny, Nz)
+    dpdx      = zeros(T, Nx, Ny, Nz)
+    dpdy      = zeros(T, Nx, Ny, Nz)
+    dpdz      = zeros(T, Nx, Ny, Nz)
+    duxdx     = zeros(T, Nx, Ny, Nz)
+    duydy     = zeros(T, Nx, Ny, Nz)
+    duzdz     = zeros(T, Nx, Ny, Nz)
+    rho_total = zeros(T, Nx, Ny, Nz)
+    tmp_real  = zeros(T, Nx, Ny, Nz)   # real staging buffer for _compute_pressure!
 
     # Pre-reshape PML vectors — eliminates per-step wrapper object allocations
     pml_x_r     = reshape(pml_x,     :, 1, 1)
@@ -580,12 +622,15 @@ function kspace_first_order(
     pml_z_sgz_r = reshape(pml_z_sgz, 1, 1, :)
 
     # Pre-compute staggered density for heterogeneous media (time-invariant)
-    rho0_sgx_3d = medium.density isa AbstractArray ? _stagger_density_3d(medium.density, 1) : nothing
-    rho0_sgy_3d = medium.density isa AbstractArray ? _stagger_density_3d(medium.density, 2) : nothing
-    rho0_sgz_3d = medium.density isa AbstractArray ? _stagger_density_3d(medium.density, 3) : nothing
+    rho0_sgx_3d = medium.density isa AbstractArray ?
+        T.(_stagger_density_3d(medium.density, 1)) : nothing
+    rho0_sgy_3d = medium.density isa AbstractArray ?
+        T.(_stagger_density_3d(medium.density, 2)) : nothing
+    rho0_sgz_3d = medium.density isa AbstractArray ?
+        T.(_stagger_density_3d(medium.density, 3)) : nothing
 
-    rho_total_prev = (absorb !== nothing && absorb.mode != :no_dispersion) ?
-        zeros(Float64, Nx, Ny, Nz) : nothing
+    rho_total_prev = (absorb_r !== nothing && absorb_r.mode != :no_dispersion) ?
+        zeros(T, Nx, Ny, Nz) : nothing
 
     # ================================================================
     # 7. Sensor data
@@ -643,8 +688,8 @@ function kspace_first_order(
             dpdx, dpdy, dpdz, duxdx, duydy, duzdz, rho_total,
             kgrid, medium, source,
             pml_x_r, pml_y_r, pml_z_r, pml_x_sgx_r, pml_y_sgy_r, pml_z_sgz_r,
-            kappa, plans, t_index,
-            absorb, rho_total_prev,
+            kappa_r, plans, t_index,
+            absorb_r, tmp_real, rho_total_prev,
             rho0_sgx_3d, rho0_sgy_3d, rho0_sgz_3d,
         )
 

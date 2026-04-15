@@ -3,50 +3,64 @@
 # ============================================================================
 
 """
-    FFTPlans
+    FFTPlans{F,I}
 
-Pre-computed FFT plans for efficient repeated transforms.
+Pre-computed real-to-complex FFT plans for efficient repeated transforms.
+
+Uses `plan_rfft` / `plan_irfft` (real ↔ complex, exploiting conjugate symmetry):
+- Forward plan maps a real array of shape `real_dims` to a complex array of
+  shape `rfft_dims`, where `rfft_dims[1] = real_dims[1] ÷ 2 + 1`.
+- Inverse plan maps the complex array back to the real array.
+
+This halves the memory and compute cost vs a complex-to-complex FFT on real
+data. For an (Nx, Ny) grid the complex scratch is only (Nx÷2+1, Ny).
 """
 struct FFTPlans{F, I}
-    forward::F   # FFTW forward plan (complex in-place)
-    inverse::I   # FFTW inverse plan (complex in-place)
+    forward::F           # plan_rfft:  real (Nx,…) → complex (Nx÷2+1,…)
+    inverse::I           # plan_irfft: complex (Nx÷2+1,…) → real (Nx,…)
+    real_dims::Dims      # original real dimensions, e.g. (Nx, Ny, Nz)
+    rfft_dims::Dims      # rfft output dimensions, e.g. (Nx÷2+1, Ny, Nz)
 end
+
+"""Return the first-dimension size of the rfft output (= Nx÷2+1)."""
+rfft_first_dim(p::FFTPlans) = p.rfft_dims[1]
 
 """
     create_fft_plans(dims; data_cast=Float64)
 
-Create in-place FFT/IFFT plans for arrays of the given dimensions.
+Create out-of-place rfft / irfft plans for arrays of the given dimensions.
 
-Uses `FFTW.MEASURE` flag for optimal performance (plans are cached internally by FFTW).
+Uses `FFTW.MEASURE` for good plans while keeping setup time reasonable.
+Threads are set to `Threads.nthreads()` — launch Julia with `-t auto` (or
+`-t N`) to exploit multi-core FFT parallelism.
 
 # Arguments
 - `dims`: Tuple of grid dimensions, e.g., `(Nx, Ny)`
-- `data_cast`: Floating point type (default: Float64)
+- `data_cast`: Floating-point element type (default: `Float64`)
 
 # Returns
-An `FFTPlans` struct with forward and inverse plans.
+An `FFTPlans` struct with forward (rfft) and inverse (irfft) plans.
 """
-function create_fft_plans(dims::Tuple; data_cast::Type{T}=Float64) where T<:AbstractFloat
+function create_fft_plans(dims::Tuple; data_cast::Type{T}=Float64) where T <: AbstractFloat
     FFTW.set_num_threads(Threads.nthreads())
-    tmp = zeros(Complex{T}, dims...)
-    fwd = plan_fft!(tmp; flags=FFTW.MEASURE)
-    inv = plan_ifft!(tmp; flags=FFTW.MEASURE)
-    return FFTPlans(fwd, inv)
+    real_tmp    = zeros(T, dims...)
+    rfft_dims   = (dims[1] ÷ 2 + 1, dims[2:end]...)
+    complex_tmp = zeros(Complex{T}, rfft_dims...)
+    fwd = plan_rfft(real_tmp;    flags=FFTW.MEASURE)
+    inv = plan_irfft(complex_tmp, dims[1]; flags=FFTW.MEASURE)
+    return FFTPlans(fwd, inv, dims, rfft_dims)
 end
 
-"""
-    create_fft_plans(grid::KWaveGrid2D; data_cast=Float64)
-
-Create FFT plans sized for the given grid.
-"""
-create_fft_plans(grid::KWaveGrid2D; data_cast::Type{T}=Float64) where T =
-    create_fft_plans((grid.Nx, grid.Ny); data_cast=data_cast)
+# Grid-dispatching convenience wrappers
 
 create_fft_plans(grid::KWaveGrid1D; data_cast::Type{T}=Float64) where T =
-    create_fft_plans((grid.Nx,); data_cast=data_cast)
+    create_fft_plans((grid.Nx,); data_cast=T)
+
+create_fft_plans(grid::KWaveGrid2D; data_cast::Type{T}=Float64) where T =
+    create_fft_plans((grid.Nx, grid.Ny); data_cast=T)
 
 create_fft_plans(grid::KWaveGrid3D; data_cast::Type{T}=Float64) where T =
-    create_fft_plans((grid.Nx, grid.Ny, grid.Nz); data_cast=data_cast)
+    create_fft_plans((grid.Nx, grid.Ny, grid.Nz); data_cast=T)
 
 # ============================================================================
 # Spectral gradient computation
@@ -55,66 +69,90 @@ create_fft_plans(grid::KWaveGrid3D; data_cast::Type{T}=Float64) where T =
 """
     spectral_gradient!(df, f, k_vec, shift_op, scratch, plans, dim, ndims_total)
 
-Compute the spatial gradient of `f` along dimension `dim` using the FFT.
+Compute the spatial gradient of the real field `f` along dimension `dim`
+using the real-to-complex FFT (rfft):
 
-    df/dx = real(IFFT(im * kx .* shift_op .* FFT(f)))
+    df/dx = irfft( im * kx_r .* shift_r .* rfft(f) )
 
-This computes the gradient on a staggered grid when `shift_op` contains
-the appropriate phase shift factors.
+where `kx_r` and `shift_r` are the wavenumber / shift vectors truncated to
+the rfft output length along the first dimension (only for `dim == 1`).
 
 # Arguments
-- `df`: Output array (overwritten with gradient values)
-- `f`: Input field array (real-valued)
-- `k_vec`: 1D wavenumber vector for this dimension
-- `shift_op`: 1D complex shift operator for staggered grid
-- `scratch`: Pre-allocated complex scratch array (same size as `f`)
-- `plans`: FFTPlans struct
-- `dim`: Dimension along which to differentiate (1, 2, or 3)
-- `ndims_total`: Total number of dimensions (1, 2, or 3)
+- `df`          : Output real array (overwritten). Same shape as `f`.
+- `f`           : Input real field array.
+- `k_vec`       : Wavenumber vector for this dimension (any float element type).
+                  For `dim == 1` only the first `rfft_first_dim(plans)` elements
+                  are used (positive frequencies); for other dims all are used.
+- `shift_op`    : Phase-shift operator for staggered grid (any complex element type).
+                  Same truncation rule as `k_vec`.
+- `scratch`     : Pre-allocated complex work array of shape `plans.rfft_dims`.
+                  Element type determines the working precision T.
+                  **Destroyed** by the inverse irfft — do not read after return.
+- `plans`       : `FFTPlans` struct.
+- `dim`         : Spatial dimension to differentiate (1, 2, or 3).
+- `ndims_total` : Total number of spatial dimensions.
+
+# Notes
+- `k_vec` and `shift_op` are auto-converted to the precision `T` of `scratch`
+  when they are Float64 and T is Float32. For the default Float64 case the
+  grid vectors are used directly (zero allocation).
+- The irfft destroys `scratch`; the caller must not use `scratch` after the
+  call without first re-populating it.
 """
-function spectral_gradient!(df::AbstractArray, f::AbstractArray,
-                            k_vec::Vector{Float64}, shift_op::Vector{ComplexF64},
-                            scratch::AbstractArray{<:Complex}, plans::FFTPlans,
-                            dim::Int, ndims_total::Int)
-    # Copy real data into complex scratch
-    scratch .= complex.(f)
+function spectral_gradient!(df::AbstractArray{T},
+                            f::AbstractArray{T},
+                            k_vec::AbstractVector,
+                            shift_op::AbstractVector,
+                            scratch::AbstractArray{Complex{T}},
+                            plans::FFTPlans,
+                            dim::Int,
+                            ndims_total::Int) where T <: AbstractFloat
 
-    # Forward FFT (in-place)
-    plans.forward * scratch
+    # Forward rfft (out-of-place): f (real, full dims) → scratch (complex, rfft dims)
+    mul!(scratch, plans.forward, f)
 
-    # Multiply by im * k * shift in frequency domain
-    # k_vec and shift_op are 1D — reshape for broadcasting along the correct dimension
+    # Ensure k and shift are T-typed for the broadcast.
+    # For the default Float64 case the grid vectors already match T, so no allocation.
+    k = k_vec  isa AbstractVector{T}         ? k_vec   : convert(Vector{T},          k_vec)
+    s = shift_op isa AbstractVector{Complex{T}} ? shift_op : convert(Vector{Complex{T}}, shift_op)
+
+    # The rfft output has Nx÷2+1 elements along the first dimension.
+    # For dim == 1, only those positive-frequency elements of k / s are relevant;
+    # for other dims, the full vector is used.
+    n1 = size(scratch, 1)   # = Nx÷2+1
+
     if ndims_total == 1
-        @. scratch = im * k_vec * shift_op * scratch
+        kv = reshape(@view(k[1:n1]), n1)
+        sv = reshape(@view(s[1:n1]), n1)
+        @. scratch = im * kv * sv * scratch
+
     elseif ndims_total == 2
         if dim == 1
-            # kx is along dim 1: shape (Nx, 1)
-            @. scratch = im * k_vec * shift_op * scratch  # broadcasts kx along columns
-        else
-            # ky is along dim 2: shape (1, Ny)
-            k_row = reshape(k_vec, 1, :)
-            s_row = reshape(shift_op, 1, :)
-            @. scratch = im * k_row * s_row * scratch
+            kv = reshape(@view(k[1:n1]), n1, 1)
+            sv = reshape(@view(s[1:n1]), n1, 1)
+        else  # dim == 2
+            kv = reshape(k, 1, :)
+            sv = reshape(s, 1, :)
         end
-    elseif ndims_total == 3
+        @. scratch = im * kv * sv * scratch
+
+    else  # ndims_total == 3
         if dim == 1
-            @. scratch = im * k_vec * shift_op * scratch
+            kv = reshape(@view(k[1:n1]), n1, 1, 1)
+            sv = reshape(@view(s[1:n1]), n1, 1, 1)
         elseif dim == 2
-            k_r = reshape(k_vec, 1, :, 1)
-            s_r = reshape(shift_op, 1, :, 1)
-            @. scratch = im * k_r * s_r * scratch
-        else
-            k_r = reshape(k_vec, 1, 1, :)
-            s_r = reshape(shift_op, 1, 1, :)
-            @. scratch = im * k_r * s_r * scratch
+            kv = reshape(k, 1, :, 1)
+            sv = reshape(s, 1, :, 1)
+        else  # dim == 3
+            kv = reshape(k, 1, 1, :)
+            sv = reshape(s, 1, 1, :)
         end
+        @. scratch = im * kv * sv * scratch
     end
 
-    # Inverse FFT (in-place)
-    plans.inverse * scratch
-
-    # Extract real part
-    @. df = real(scratch)
+    # Inverse irfft (out-of-place): scratch (complex) → df (real, full dims).
+    # Note: irfft destroys the input (scratch) — this is expected and acceptable.
+    mul!(df, plans.inverse, scratch)
 
     return df
 end
