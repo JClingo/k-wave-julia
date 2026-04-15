@@ -40,7 +40,7 @@ jobs:
       - name: Configure Conda.jl
         shell: bash
         run: |
-          julia -e 'ENV["CONDA_JL_HOME"] = ENV["CONDA"]; import Pkg; Pkg.build("Conda")'
+          julia --project -e 'ENV["CONDA_JL_HOME"] = ENV["CONDA"]; import Pkg; Pkg.build("Conda")'
 
       - name: Install dependencies
         run: |
