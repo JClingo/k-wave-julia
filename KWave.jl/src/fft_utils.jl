@@ -42,7 +42,12 @@ Threads are set to `Threads.nthreads()` — launch Julia with `-t auto` (or
 An `FFTPlans` struct with forward (rfft) and inverse (irfft) plans.
 """
 function create_fft_plans(dims::Tuple; data_cast::Type{T}=Float64) where T <: AbstractFloat
-    FFTW.set_num_threads(Threads.nthreads())
+    # Use multi-threaded FFTW only for large arrays — for small grids the thread
+    # synchronisation overhead exceeds the compute benefit and can make Julia
+    # 10× slower than MATLAB on 1D scenarios.  Threshold chosen empirically:
+    # single-threaded is faster below ~64 k points; multi-threaded above.
+    nthreads = prod(dims) >= 65_536 ? Threads.nthreads() : 1
+    FFTW.set_num_threads(nthreads)
     real_tmp    = zeros(T, dims...)
     rfft_dims   = (dims[1] ÷ 2 + 1, dims[2:end]...)
     complex_tmp = zeros(Complex{T}, rfft_dims...)
@@ -51,10 +56,24 @@ function create_fft_plans(dims::Tuple; data_cast::Type{T}=Float64) where T <: Ab
     return FFTPlans(fwd, inv, dims, rfft_dims)
 end
 
+# ── Extension hook for 1D FFT backend ──────────────────────────────────────
+#
+# Extensions (e.g. KWaveAppleAccelerateExt) set this Ref in their __init__ to
+# replace the default FFTW planner with a faster backend (e.g. vDSP).
+# The factory signature is: (Nx::Int, ::Type{T}) -> FFTPlans
+# Mutated only at runtime (__init__), never during precompilation — this avoids
+# the "method overwriting during precompilation" error that arises from
+# specializing create_fft_plans(::KWaveGrid1D) in both the base module and an
+# extension.
+const _CREATE_1D_PLANS = Ref{Any}(nothing)
+
 # Grid-dispatching convenience wrappers
 
-create_fft_plans(grid::KWaveGrid1D; data_cast::Type{T}=Float64) where T =
+function create_fft_plans(grid::KWaveGrid1D; data_cast::Type{T}=Float64) where T
+    factory = _CREATE_1D_PLANS[]
+    factory !== nothing && return factory(grid.Nx, T)
     create_fft_plans((grid.Nx,); data_cast=T)
+end
 
 create_fft_plans(grid::KWaveGrid2D; data_cast::Type{T}=Float64) where T =
     create_fft_plans((grid.Nx, grid.Ny); data_cast=T)
@@ -155,4 +174,57 @@ function spectral_gradient!(df::AbstractArray{T},
     mul!(df, plans.inverse, scratch)
 
     return df
+end
+
+# ============================================================================
+# Pre-cast spectral operators
+# ============================================================================
+
+"""
+    SpectralOps{T}
+
+Wavenumber vectors and staggered-grid phase-shift operators pre-cast to the
+working precision `T`.  Created once before the time loop so that per-step
+calls to `spectral_gradient!` never trigger a Float64→T conversion (and the
+associated heap allocation) when `T = Float32`.
+
+For 1D grids `ky`, `kz` and the `ddy_*`/`ddz_*` fields are empty vectors.
+For 2D grids `kz` and the `ddz_*` fields are empty.
+"""
+struct SpectralOps{T<:AbstractFloat}
+    kx::Vector{T}
+    ky::Vector{T}
+    kz::Vector{T}
+    ddx_pos::Vector{Complex{T}}
+    ddx_neg::Vector{Complex{T}}
+    ddy_pos::Vector{Complex{T}}
+    ddy_neg::Vector{Complex{T}}
+    ddz_pos::Vector{Complex{T}}
+    ddz_neg::Vector{Complex{T}}
+end
+
+function create_spectral_ops(grid::KWaveGrid1D; data_cast::Type{T}=Float64) where T<:AbstractFloat
+    SpectralOps{T}(
+        T.(grid.kx_vec), T[], T[],
+        Complex{T}.(grid.ddx_k_shift_pos), Complex{T}.(grid.ddx_k_shift_neg),
+        Complex{T}[], Complex{T}[], Complex{T}[], Complex{T}[],
+    )
+end
+
+function create_spectral_ops(grid::KWaveGrid2D; data_cast::Type{T}=Float64) where T<:AbstractFloat
+    SpectralOps{T}(
+        T.(grid.kx_vec), T.(grid.ky_vec), T[],
+        Complex{T}.(grid.ddx_k_shift_pos), Complex{T}.(grid.ddx_k_shift_neg),
+        Complex{T}.(grid.ddy_k_shift_pos), Complex{T}.(grid.ddy_k_shift_neg),
+        Complex{T}[], Complex{T}[],
+    )
+end
+
+function create_spectral_ops(grid::KWaveGrid3D; data_cast::Type{T}=Float64) where T<:AbstractFloat
+    SpectralOps{T}(
+        T.(grid.kx_vec), T.(grid.ky_vec), T.(grid.kz_vec),
+        Complex{T}.(grid.ddx_k_shift_pos), Complex{T}.(grid.ddx_k_shift_neg),
+        Complex{T}.(grid.ddy_k_shift_pos), Complex{T}.(grid.ddy_k_shift_neg),
+        Complex{T}.(grid.ddz_k_shift_pos), Complex{T}.(grid.ddz_k_shift_neg),
+    )
 end

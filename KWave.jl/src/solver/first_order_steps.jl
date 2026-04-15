@@ -308,6 +308,7 @@ function time_step_1d!(
     pml_x_sgx::AbstractVector,
     kappa_r::AbstractVector,                            # rfft-shaped kappa
     plans::FFTPlans,
+    sops::SpectralOps,                                  # pre-cast k-vectors (avoids f32 alloc)
     t_index::Int,
     absorb::Union{Nothing, AbsorptionParams},
     tmp_real::AbstractVector,                           # full-grid real scratch
@@ -319,7 +320,7 @@ function time_step_1d!(
     rho0 = medium.density
 
     # === STEP 1: Pressure gradient ===
-    spectral_gradient!(dpdx, p, kgrid.kx_vec, kgrid.ddx_k_shift_pos, scratch1, plans, 1, 1)
+    spectral_gradient!(dpdx, p, sops.kx, sops.ddx_pos, scratch1, plans, 1, 1)
 
     # === STEP 2: Velocity update with PML ===
     if rho0_sgx !== nothing
@@ -334,7 +335,7 @@ function time_step_1d!(
     end
 
     # === STEP 4: Velocity divergence ===
-    spectral_gradient!(duxdx, ux, kgrid.kx_vec, kgrid.ddx_k_shift_neg, scratch1, plans, 1, 1)
+    spectral_gradient!(duxdx, ux, sops.kx, sops.ddx_neg, scratch1, plans, 1, 1)
 
     # === STEP 5: Density update with PML ===
     @. rhox = pml_x * (pml_x * rhox - dt * rho0 * duxdx)
@@ -383,6 +384,7 @@ function time_step_2d!(
     pml_y_sgy_row,                                      # pre-reshaped staggered PML (1×Ny)
     kappa_r::AbstractMatrix,                            # rfft-shaped kappa
     plans::FFTPlans,
+    sops::SpectralOps,                                  # pre-cast k-vectors (avoids f32 alloc)
     t_index::Int,
     absorb::Union{Nothing, AbsorptionParams}=nothing,
     tmp_real::Union{Nothing, AbstractMatrix}=nothing,   # full-grid real scratch
@@ -395,8 +397,8 @@ function time_step_2d!(
     rho0 = medium.density
 
     # === STEP 1: Pressure gradient via FFT ===
-    spectral_gradient!(dpdx, p, kgrid.kx_vec, kgrid.ddx_k_shift_pos, scratch1, plans, 1, 2)
-    spectral_gradient!(dpdy, p, kgrid.ky_vec, kgrid.ddy_k_shift_pos, scratch1, plans, 2, 2)
+    spectral_gradient!(dpdx, p, sops.kx, sops.ddx_pos, scratch1, plans, 1, 2)
+    spectral_gradient!(dpdy, p, sops.ky, sops.ddy_pos, scratch1, plans, 2, 2)
 
     # === STEP 2: Velocity update with PML ===
     if rho0_sgx !== nothing
@@ -413,8 +415,8 @@ function time_step_2d!(
     end
 
     # === STEP 4: Velocity divergence via FFT ===
-    spectral_gradient!(duxdx, ux, kgrid.kx_vec, kgrid.ddx_k_shift_neg, scratch1, plans, 1, 2)
-    spectral_gradient!(duydy, uy, kgrid.ky_vec, kgrid.ddy_k_shift_neg, scratch1, plans, 2, 2)
+    spectral_gradient!(duxdx, ux, sops.kx, sops.ddx_neg, scratch1, plans, 1, 2)
+    spectral_gradient!(duydy, uy, sops.ky, sops.ddy_neg, scratch1, plans, 2, 2)
 
     # === STEP 5: Density update with split-field PML ===
     @. rhox = pml_x_col * (pml_x_col * rhox - dt * rho0 * duxdx)
@@ -470,6 +472,7 @@ function time_step_3d!(
     pml_z_sgz_r,                                       # pre-reshaped staggered PML (1×1×Nz)
     kappa_r::AbstractArray{<:Real,3},                  # rfft-shaped kappa
     plans::FFTPlans,
+    sops::SpectralOps,                                  # pre-cast k-vectors (avoids f32 alloc)
     t_index::Int,
     absorb::Union{Nothing, AbsorptionParams}=nothing,
     tmp_real::Union{Nothing, AbstractArray{<:Real,3}}=nothing,  # full-grid real scratch
@@ -483,9 +486,9 @@ function time_step_3d!(
     rho0 = medium.density
 
     # === STEP 1: Pressure gradient via FFT ===
-    spectral_gradient!(dpdx, p, kgrid.kx_vec, kgrid.ddx_k_shift_pos, scratch1, plans, 1, 3)
-    spectral_gradient!(dpdy, p, kgrid.ky_vec, kgrid.ddy_k_shift_pos, scratch1, plans, 2, 3)
-    spectral_gradient!(dpdz, p, kgrid.kz_vec, kgrid.ddz_k_shift_pos, scratch1, plans, 3, 3)
+    spectral_gradient!(dpdx, p, sops.kx, sops.ddx_pos, scratch1, plans, 1, 3)
+    spectral_gradient!(dpdy, p, sops.ky, sops.ddy_pos, scratch1, plans, 2, 3)
+    spectral_gradient!(dpdz, p, sops.kz, sops.ddz_pos, scratch1, plans, 3, 3)
 
     # === STEP 2: Velocity update with PML ===
     if rho0_sgx !== nothing
@@ -504,9 +507,9 @@ function time_step_3d!(
     end
 
     # === STEP 4: Velocity divergence via FFT ===
-    spectral_gradient!(duxdx, ux, kgrid.kx_vec, kgrid.ddx_k_shift_neg, scratch1, plans, 1, 3)
-    spectral_gradient!(duydy, uy, kgrid.ky_vec, kgrid.ddy_k_shift_neg, scratch1, plans, 2, 3)
-    spectral_gradient!(duzdz, uz, kgrid.kz_vec, kgrid.ddz_k_shift_neg, scratch1, plans, 3, 3)
+    spectral_gradient!(duxdx, ux, sops.kx, sops.ddx_neg, scratch1, plans, 1, 3)
+    spectral_gradient!(duydy, uy, sops.ky, sops.ddy_neg, scratch1, plans, 2, 3)
+    spectral_gradient!(duzdz, uz, sops.kz, sops.ddz_neg, scratch1, plans, 3, 3)
 
     # === STEP 5: Density update with split-field PML ===
     @. rhox = pml_x_r * (pml_x_r * rhox - dt * rho0 * duxdx)

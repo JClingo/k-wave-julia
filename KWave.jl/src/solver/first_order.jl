@@ -107,6 +107,7 @@ function kspace_first_order(
     plot_scale::Union{Symbol, Tuple}=:auto,
     record_movie::Union{Nothing, String}=nothing,
     progress_callback::Union{Nothing, Function}=nothing,
+    show_progress::Bool=true,
 ) where T <: AbstractFloat
 
     # ================================================================
@@ -149,6 +150,7 @@ function kspace_first_order(
     # 4. Create FFT plans and pre-compute spectral operators
     # ================================================================
     plans = create_fft_plans(kgrid; data_cast=T)
+    sops  = create_spectral_ops(kgrid; data_cast=T)
     n1    = rfft_first_dim(plans)   # = Nx÷2+1
 
     c_ref = medium.sound_speed isa Real ? medium.sound_speed : mean(medium.sound_speed)
@@ -225,7 +227,7 @@ function kspace_first_order(
     # ================================================================
     # 10. Time loop
     # ================================================================
-    prog = Progress(Nt; desc="k-Wave 1D: ", enabled=true)
+    prog = Progress(Nt; desc="k-Wave 1D: ", enabled=show_progress)
 
     for t_index in 1:Nt
         # Time-reversal: inject boundary data at sensor locations (reversed in time)
@@ -245,7 +247,7 @@ function kspace_first_order(
             dpdx, duxdx,
             kgrid, medium, source,
             pml_x, pml_x_sgx,
-            kappa_r, plans, t_index,
+            kappa_r, plans, sops, t_index,
             absorb_r, tmp_real, rho_total_prev,
             rho0_sgx_1d,
         )
@@ -300,6 +302,7 @@ function kspace_first_order(
     plot_scale::Union{Symbol, Tuple}=:auto,
     record_movie::Union{Nothing, String}=nothing,
     progress_callback::Union{Nothing, Function}=nothing,
+    show_progress::Bool=true,
 ) where T <: AbstractFloat
 
     # ================================================================
@@ -352,6 +355,7 @@ function kspace_first_order(
     # 4. Create FFT plans and pre-compute spectral operators
     # ================================================================
     plans = create_fft_plans(kgrid; data_cast=T)
+    sops  = create_spectral_ops(kgrid; data_cast=T)
     n1    = rfft_first_dim(plans)   # = Nx÷2+1
 
     c_ref = medium.sound_speed isa Real ? medium.sound_speed : mean(medium.sound_speed)
@@ -439,7 +443,7 @@ function kspace_first_order(
     # ================================================================
     # 10. Time loop
     # ================================================================
-    prog = Progress(Nt; desc="k-Wave 2D: ", enabled=true)
+    prog = Progress(Nt; desc="k-Wave 2D: ", enabled=show_progress)
 
     for t_index in 1:Nt
         # Time-reversal: inject boundary data at sensor locations (reversed in time)
@@ -461,7 +465,7 @@ function kspace_first_order(
             dpdx, dpdy, duxdx, duydy, rho_total,
             kgrid, medium, source,
             pml_x_col, pml_y_row, pml_x_sgx_col, pml_y_sgy_row,
-            kappa_r, plans, t_index,
+            kappa_r, plans, sops, t_index,
             absorb_r, tmp_real, rho_total_prev,
             rho0_sgx_2d, rho0_sgy_2d,
         )
@@ -516,6 +520,7 @@ function kspace_first_order(
     plot_scale::Union{Symbol, Tuple}=:auto,
     record_movie::Union{Nothing, String}=nothing,
     progress_callback::Union{Nothing, Function}=nothing,
+    show_progress::Bool=true,
 ) where T <: AbstractFloat
 
     # ================================================================
@@ -570,6 +575,7 @@ function kspace_first_order(
     # 4. Create FFT plans and pre-compute spectral operators
     # ================================================================
     plans = create_fft_plans(kgrid; data_cast=T)
+    sops  = create_spectral_ops(kgrid; data_cast=T)
     n1    = rfft_first_dim(plans)   # = Nx÷2+1
 
     c_ref = medium.sound_speed isa Real ? medium.sound_speed : mean(medium.sound_speed)
@@ -666,7 +672,7 @@ function kspace_first_order(
     # ================================================================
     # 10. Time loop
     # ================================================================
-    prog = Progress(Nt; desc="k-Wave 3D: ", enabled=true)
+    prog = Progress(Nt; desc="k-Wave 3D: ", enabled=show_progress)
 
     for t_index in 1:Nt
         if _check_time_reversal
@@ -688,7 +694,7 @@ function kspace_first_order(
             dpdx, dpdy, dpdz, duxdx, duydy, duzdz, rho_total,
             kgrid, medium, source,
             pml_x_r, pml_y_r, pml_z_r, pml_x_sgx_r, pml_y_sgy_r, pml_z_sgz_r,
-            kappa_r, plans, t_index,
+            kappa_r, plans, sops, t_index,
             absorb_r, tmp_real, rho_total_prev,
             rho0_sgx_3d, rho0_sgy_3d, rho0_sgz_3d,
         )

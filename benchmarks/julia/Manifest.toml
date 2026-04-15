@@ -2,7 +2,7 @@
 
 julia_version = "1.12.6"
 manifest_format = "2.0"
-project_hash = "02da7417a697e69ba986f015995a1b59ec48e5f1"
+project_hash = "d8d4f272d0df32f5185e5ddf8448fccd3ba23249"
 
 [[deps.AbstractFFTs]]
 deps = ["LinearAlgebra"]
@@ -50,6 +50,16 @@ deps = ["Colors"]
 git-tree-sha1 = "e092fa223bf66a3c41f9c022bd074d916dc303e7"
 uuid = "27a7e980-b3e6-11e9-2bcd-0b925532e340"
 version = "0.4.2"
+
+[[deps.AppleAccelerate]]
+deps = ["Libdl", "LinearAlgebra", "SparseArrays"]
+git-tree-sha1 = "d3fe615e394f765b7ef7e0a1ca10b007305d7e6f"
+uuid = "13e28ba4-7ad8-5781-acae-3021b1ed3924"
+version = "0.6.0"
+weakdeps = ["AbstractFFTs"]
+
+    [deps.AppleAccelerate.extensions]
+    AppleAccelerateAbstractFFTsExt = "AbstractFFTs"
 
 [[deps.ArgTools]]
 uuid = "0dad84c5-d112-42e6-8d28-ef12dabb789f"
@@ -934,20 +944,24 @@ version = "0.4.0"
 
     [deps.KWave.extensions]
     KWaveAMDGPUExt = "AMDGPU"
+    KWaveAppleAccelerateExt = "AppleAccelerate"
     KWaveCUDAExt = "CUDA"
     KWaveCairoMakieExt = "CairoMakie"
     KWaveGLMakieExt = "GLMakie"
+    KWaveMKLExt = "MKL"
     KWaveMetalExt = "Metal"
     KWaveUnitfulExt = "Unitful"
     KWaveWGLMakieExt = ["WGLMakie", "Bonito"]
 
     [deps.KWave.weakdeps]
     AMDGPU = "21141c5a-9bdb-4563-92ae-f87d6854732e"
+    AppleAccelerate = "13e28ba4-7ad8-5781-acae-3021b1ed3924"
     Bonito = "824d6782-a2ef-11e9-3a09-e5662e0c26f8"
     CUDA = "052768ef-5323-5732-b1bb-66c8b64840ba"
     CairoMakie = "13f3f980-e62b-5c42-98c6-ff1f3baf88f0"
     GLMakie = "e9467ef8-e4e7-5192-8a1a-b1aee30e663a"
     IJulia = "7073ff75-c697-5162-941a-fcdaad2a7d2a"
+    MKL = "33e6dc65-8f57-5167-99aa-e5a354878fb2"
     Metal = "dde4c033-4e86-420c-a63e-0dd931031962"
     Unitful = "1986cc42-f94f-5a68-af5c-568840ba703d"
     WGLMakie = "276b4fcb-3e11-5398-bf8b-a0c2d153d008"

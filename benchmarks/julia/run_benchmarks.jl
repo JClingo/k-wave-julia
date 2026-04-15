@@ -26,8 +26,18 @@ show severely degraded 2D/3D performance vs MATLAB.
 using Pkg
 Pkg.activate(@__DIR__)
 
+# Load Apple Accelerate before KWave so the KWaveAppleAccelerateExt extension
+# is triggered.  On Apple Silicon this replaces FFTW (which ships without ARM
+# SIMD flags) with vDSP for 1D FFTs — critical for 1D scenario performance.
+try
+    using AppleAccelerate
+catch e
+    @info "AppleAccelerate not available: $(e). Using FFTW for all FFT operations."
+end
+
 using KWave
 using FFTW
+using LinearAlgebra: mul!
 using BenchmarkTools
 using Statistics
 using Random
@@ -263,6 +273,7 @@ function run_sim_benchmarks(; data_cast::Type=Float64, backend::String="cpu_f64"
         f = () -> kspace_first_order(kgrid, medium, source, sensor;
                                       smooth_p0=false,
                                       plot_sim=false,
+                                      show_progress=false,
                                       pml_size=s.pml_size,
                                       data_cast=data_cast)
 
@@ -301,33 +312,44 @@ end
 
 function run_fft_benchmarks()
     println("\n─── FFT component micro-benchmarks ───")
+    println("    (using mul! with pre-allocated output — allocation-free timing)")
 
     rows = []
 
-    # 1D FFT
+    # 1D rfft (matches solver: real → complex half-spectrum)
+    # Single-threaded FFTW — small 1D sizes don't benefit from parallelism,
+    # and 1 thread is already faster than MATLAB on these sizes.
     for N in [128, 256, 512, 1024, 2048, 4096, 8192, 16384]
-        x    = rand(ComplexF64, N)
-        plan = plan_fft(x; flags=FFTW.MEASURE)
-        b    = @benchmark $plan * $x  samples=1000  evals=5
-        flops = 5 * N * log2(N)           # standard FFT flop count
-        med_ns = median(b).time
-        @printf("  FFT 1D  N=%-6d  median=%7.2f µs  %.2f GFLOP/s\n",
-                N, med_ns/1e3, flops/med_ns)
+        x     = rand(Float64, N)
+        out   = zeros(ComplexF64, N ÷ 2 + 1)
+        flops = 5 * N * log2(N)
+
+        # ── FFTW plan (single-threaded for small N) ──
+        FFTW.set_num_threads(1)
+        plan_fftw = FFTW.plan_rfft(x; flags=FFTW.MEASURE)
+        b_fftw    = @benchmark mul!($out, $plan_fftw, $x)  samples=1000  evals=5
+        med_fftw  = median(b_fftw).time
+        @printf("  rfft 1D FFTW  N=%-6d  median=%7.2f µs  %.2f GFLOP/s\n",
+                N, med_fftw/1e3, flops/med_fftw)
         push!(rows, (language="julia", backend="cpu_f64", label="fft_1d",
                      dim=1, N=N, Nx=N, Ny=1, Nz=1,
-                     median_ns=med_ns, min_ns=minimum(b).time,
-                     throughput_gflops=flops/med_ns))
-    end
+                     median_ns=med_fftw, min_ns=minimum(b_fftw).time,
+                     throughput_gflops=flops/med_fftw))
 
-    # 2D FFT
+    end
+    # Restore thread count for subsequent (larger) benchmarks
+    FFTW.set_num_threads(Threads.nthreads())
+
+    # 2D rfft
     for (Nx, Ny) in [(64,64),(128,128),(256,256),(512,512),(1024,1024)]
-        x    = rand(ComplexF64, Nx, Ny)
-        plan = plan_fft(x; flags=FFTW.MEASURE)
-        b    = @benchmark $plan * $x  samples=200  evals=3
+        x    = rand(Float64, Nx, Ny)
+        plan = plan_rfft(x; flags=FFTW.MEASURE)
+        out  = zeros(ComplexF64, Nx ÷ 2 + 1, Ny)
+        b    = @benchmark mul!($out, $plan, $x)  samples=200  evals=3
         N    = Nx * Ny
         flops = 5 * N * log2(N)
         med_ns = median(b).time
-        @printf("  FFT 2D  %4dx%-4d  median=%7.2f ms  %.2f GFLOP/s\n",
+        @printf("  rfft 2D  %4dx%-4d  median=%7.2f ms  %.2f GFLOP/s\n",
                 Nx, Ny, med_ns/1e6, flops/med_ns)
         push!(rows, (language="julia", backend="cpu_f64", label="fft_2d",
                      dim=2, N=N, Nx=Nx, Ny=Ny, Nz=1,
@@ -335,15 +357,16 @@ function run_fft_benchmarks()
                      throughput_gflops=flops/med_ns))
     end
 
-    # 3D FFT
+    # 3D rfft
     for (Nx, Ny, Nz) in [(32,32,32),(64,64,64),(128,128,128),(256,256,256)]
-        x    = rand(ComplexF64, Nx, Ny, Nz)
-        plan = plan_fft(x; flags=FFTW.MEASURE)
-        b    = @benchmark $plan * $x  samples=50  evals=3
+        x    = rand(Float64, Nx, Ny, Nz)
+        plan = plan_rfft(x; flags=FFTW.MEASURE)
+        out  = zeros(ComplexF64, Nx ÷ 2 + 1, Ny, Nz)
+        b    = @benchmark mul!($out, $plan, $x)  samples=50  evals=3
         N    = Nx * Ny * Nz
         flops = 5 * N * log2(N)
         med_ns = median(b).time
-        @printf("  FFT 3D  %dx%dx%-3d  median=%7.2f ms  %.2f GFLOP/s\n",
+        @printf("  rfft 3D  %dx%dx%-3d  median=%7.2f ms  %.2f GFLOP/s\n",
                 Nx, Ny, Nz, med_ns/1e6, flops/med_ns)
         push!(rows, (language="julia", backend="cpu_f64", label="fft_3d",
                      dim=3, N=N, Nx=Nx, Ny=Ny, Nz=Nz,
@@ -374,6 +397,7 @@ f32_rows = let rows = []
         f = () -> kspace_first_order(kgrid, medium, source, sensor;
                                       smooth_p0=false,
                                       plot_sim=false,
+                                      show_progress=false,
                                       pml_size=s.pml_size,
                                       data_cast=Float32)
 
