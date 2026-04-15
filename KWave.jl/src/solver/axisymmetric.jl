@@ -69,13 +69,27 @@ function kspace_first_order_as(
     # 3. Pre-compute k-space correction and absorption
     # ================================================================
     c_ref = medium.sound_speed isa Real ? medium.sound_speed : mean(medium.sound_speed)
-    kappa = _compute_kappa(kgrid.k, c_ref, dt)
     absorb = _precompute_absorption(medium, kgrid.k, c_ref)
 
     # ================================================================
     # 4. Create FFT plans
     # ================================================================
     plans = create_fft_plans(kgrid; data_cast=T)
+
+    # rfft-shaped kappa and absorption operators: slice first dim to Nx÷2+1
+    n1 = plans.rfft_dims[1]
+    kappa = T.(_compute_kappa(kgrid.k, c_ref, dt))[1:n1, :]
+    absorb = if absorb !== nothing
+        AbsorptionParams(
+            T(absorb.absorb_tau),
+            T(absorb.absorb_eta),
+            T.(absorb.absorb_nabla1)[1:n1, :],
+            T.(absorb.absorb_nabla2)[1:n1, :],
+            absorb.mode,
+        )
+    else
+        nothing
+    end
 
     # ================================================================
     # 5. Radial coordinate array for geometric correction
