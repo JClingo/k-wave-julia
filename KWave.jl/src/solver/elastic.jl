@@ -197,7 +197,7 @@ function pstd_elastic_2d(
 
     # FFT plans
     plans = create_fft_plans(kgrid; data_cast=T)
-    scratch = zeros(ComplexF64, Nx, Ny)
+    scratch = zeros(ComplexF64, plans.rfft_dims...)
 
     # Field arrays — stress-velocity formulation
     vx = zeros(Float64, Nx, Ny)      # x-velocity
@@ -434,7 +434,7 @@ function pstd_elastic_3d(
 
     # FFT plans
     plans = create_fft_plans(kgrid; data_cast=T)
-    scratch = zeros(ComplexF64, Nx, Ny, Nz)
+    scratch = zeros(ComplexF64, plans.rfft_dims...)
 
     # Field arrays
     vx = zeros(Float64, Nx, Ny, Nz)

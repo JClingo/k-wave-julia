@@ -126,15 +126,15 @@ function kwave_diffusion(
         medium.density .* medium.specific_heat
 
     plans = create_fft_plans(kgrid)
-    scratch = zeros(ComplexF64, Nx)
+    n1 = plans.rfft_dims[1]
+    k_sq_1d = kgrid.kx_vec[1:n1].^2
 
     prog = Progress(Nt; desc="Bioheat 1D: ", enabled=true)
 
     for t in 1:Nt
-        # Laplacian via spectral method: ∇²T = ifft(-k² * fft(T))
-        T_hat = plans.forward * complex.(T_field)
-        k_sq = kgrid.kx_vec.^2
-        laplacian = real.(plans.inverse * (-k_sq .* T_hat))
+        # Laplacian via spectral method: ∇²T = irfft(-k² * rfft(T))
+        T_hat = plans.forward * T_field
+        laplacian = real.(plans.inverse * (-k_sq_1d .* T_hat))
 
         # Diffusion term
         if kappa isa Real
@@ -204,15 +204,15 @@ function kwave_diffusion(
         medium.density .* medium.specific_heat
 
     plans = create_fft_plans(kgrid)
-
-    prog = Progress(Nt; desc="Bioheat 2D: ", enabled=true)
-
-    kx_2d = kgrid.kx_vec
+    n1 = plans.rfft_dims[1]
+    kx_2d = reshape(kgrid.kx_vec[1:n1], n1, 1)
     ky_2d = reshape(kgrid.ky_vec, 1, :)
     k_sq = kx_2d.^2 .+ ky_2d.^2
 
+    prog = Progress(Nt; desc="Bioheat 2D: ", enabled=true)
+
     for t in 1:Nt
-        T_hat = plans.forward * complex.(T_field)
+        T_hat = plans.forward * T_field
         laplacian = real.(plans.inverse * (-k_sq .* T_hat))
 
         if kappa isa Real
@@ -278,8 +278,8 @@ function kwave_diffusion(
         medium.density .* medium.specific_heat
 
     plans = create_fft_plans(kgrid)
-
-    kx_3d = kgrid.kx_vec
+    n1 = plans.rfft_dims[1]
+    kx_3d = reshape(kgrid.kx_vec[1:n1], n1, 1, 1)
     ky_3d = reshape(kgrid.ky_vec, 1, :, 1)
     kz_3d = reshape(kgrid.kz_vec, 1, 1, :)
     k_sq = kx_3d.^2 .+ ky_3d.^2 .+ kz_3d.^2
@@ -287,7 +287,7 @@ function kwave_diffusion(
     prog = Progress(Nt; desc="Bioheat 3D: ", enabled=true)
 
     for t in 1:Nt
-        T_hat = plans.forward * complex.(T_field)
+        T_hat = plans.forward * T_field
         laplacian = real.(plans.inverse * (-k_sq .* T_hat))
 
         if kappa isa Real

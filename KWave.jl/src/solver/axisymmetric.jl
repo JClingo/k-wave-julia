@@ -96,8 +96,8 @@ function kspace_first_order_as(
     ur = zeros(Float64, Nx, Nr)   # radial velocity
     rhox = zeros(Float64, Nx, Nr)
     rhor = zeros(Float64, Nx, Nr)
-    scratch1 = zeros(ComplexF64, Nx, Nr)
-    scratch2 = zeros(ComplexF64, Nx, Nr)
+    scratch1 = zeros(ComplexF64, plans.rfft_dims...)
+    scratch2 = zeros(ComplexF64, plans.rfft_dims...)
 
     rho_total_prev = (absorb !== nothing && absorb.mode != :no_dispersion) ?
         zeros(Float64, Nx, Nr) : nothing
