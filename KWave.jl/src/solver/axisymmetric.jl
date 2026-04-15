@@ -98,6 +98,7 @@ function kspace_first_order_as(
     rhor = zeros(Float64, Nx, Nr)
     scratch1 = zeros(ComplexF64, plans.rfft_dims...)
     scratch2 = zeros(ComplexF64, plans.rfft_dims...)
+    tmp_real  = zeros(T, Nx, Nr)   # real staging buffer for _compute_pressure!
 
     rho_total_prev = (absorb !== nothing && absorb.mode != :no_dispersion) ?
         zeros(Float64, Nx, Nr) : nothing
@@ -180,7 +181,7 @@ function kspace_first_order_as(
         rho_total = rhox .+ rhor
 
         _compute_pressure!(p, rho_total, rho_total_prev,
-                          scratch1, scratch2, kappa,
+                          scratch1, scratch2, tmp_real, kappa,
                           c0, rho0, medium.BonA, absorb, plans, dt)
 
         if rho_total_prev !== nothing

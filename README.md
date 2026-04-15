@@ -281,6 +281,14 @@ Apache-2.0
 
 Based on the [k-Wave MATLAB toolbox](http://www.k-wave.org/) developed at University College London. This is a clean-room port — no MATLAB source code was used.
 
+## Notes
+
+Feel free to fork and extend as you will. I built this to offer a more performant and more portable open-source option to the k-wave original. I am also not a physicist so I can't fully confirm that what you get here will be functionally identical to everything you'd get in the original (although I wrote automated tests as much as possible). I recommend checking your work against the original before relying on this spin-off. 
+
+This also needs to be tested in more environments (so far it's just been validated to run on a MacBook Pro with an M1).
+
+Feel free to reach out/comment/PR as you wish/notice issues! And keep riding those waves. 😎🏄‍♀️🌊
+
 ## References
 
 - B. E. Treeby and B. T. Cox, "k-Wave: MATLAB toolbox for the simulation and reconstruction of photoacoustic wave fields," *J. Biomed. Opt.*, vol. 15, no. 2, 021314, 2010.
