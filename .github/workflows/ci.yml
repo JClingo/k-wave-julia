@@ -37,6 +37,11 @@ jobs:
         with:
           auto-activate-base: true
 
+      - name: Configure Conda.jl
+        shell: bash
+        run: |
+          julia -e 'ENV["CONDA_JL_HOME"] = ENV["CONDA"]; import Pkg; Pkg.build("Conda")'
+
       - name: Install dependencies
         run: |
           julia --project -e '
