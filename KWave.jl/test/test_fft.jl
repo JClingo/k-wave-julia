@@ -12,13 +12,13 @@
     @testset "FFT round-trip" begin
         N = 32
         plans = KWave.create_fft_plans((N, N))
-        data = randn(ComplexF64, N, N)
+        data = randn(Float64, N, N)
         original = copy(data)
 
-        plans.forward * data
-        plans.inverse * data
+        scratch = plans.forward * data
+        result = plans.inverse * scratch
 
-        @test data ≈ original atol=1e-12
+        @test result ≈ original atol=1e-12
     end
 
     @testset "Spectral gradient - 2D sinusoidal" begin
@@ -28,7 +28,7 @@
         kgrid = KWaveGrid(Nx, dx, Ny, dy)
 
         plans = KWave.create_fft_plans(kgrid)
-        scratch = zeros(ComplexF64, Nx, Ny)
+        scratch = zeros(ComplexF64, Nx÷2+1, Ny)
 
         # Create a sinusoidal field: f(x,y) = sin(2π * x / L)
         Lx = Nx * dx

@@ -1,3 +1,4 @@
 KWave.jl/examples/generated/
 .SHORTCUTS.md
 *.ipynb
+.DS_Store
