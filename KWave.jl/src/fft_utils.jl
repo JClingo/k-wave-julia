@@ -7,9 +7,9 @@
 
 Pre-computed FFT plans for efficient repeated transforms.
 """
-struct FFTPlans
-    forward::Any   # FFTW forward plan (complex in-place)
-    inverse::Any   # FFTW inverse plan (complex in-place)
+struct FFTPlans{F, I}
+    forward::F   # FFTW forward plan (complex in-place)
+    inverse::I   # FFTW inverse plan (complex in-place)
 end
 
 """
@@ -27,6 +27,7 @@ Uses `FFTW.MEASURE` flag for optimal performance (plans are cached internally by
 An `FFTPlans` struct with forward and inverse plans.
 """
 function create_fft_plans(dims::Tuple; data_cast::Type{T}=Float64) where T<:AbstractFloat
+    FFTW.set_num_threads(Threads.nthreads())
     tmp = zeros(Complex{T}, dims...)
     fwd = plan_fft!(tmp; flags=FFTW.MEASURE)
     inv = plan_ifft!(tmp; flags=FFTW.MEASURE)

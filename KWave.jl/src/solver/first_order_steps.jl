@@ -16,11 +16,11 @@ Following the k-Wave formulation (Treeby & Cox, 2010):
 - `absorb_nabla1`: k-space operator k^y (fractional Laplacian for absorption)
 - `absorb_nabla2`: k-space operator k^(y-1) (fractional Laplacian for dispersion)
 """
-struct AbsorptionParams
+struct AbsorptionParams{A<:AbstractArray}
     absorb_tau::Float64           # -2 * alpha_nepers * c_ref^(y-1)
     absorb_eta::Float64           # 2 * alpha_nepers * c_ref^(y-1) * tan(π*y/2)
-    absorb_nabla1::AbstractArray  # k^y
-    absorb_nabla2::AbstractArray  # k^(y-1)
+    absorb_nabla1::A              # k^y
+    absorb_nabla2::A              # k^(y-1)
     mode::Symbol                  # :no_absorption, :no_dispersion, :stokes
 end
 
@@ -247,7 +247,7 @@ function _compute_pressure!(
             else
                 rho_total_prev
             end
-            scratch2 .= complex.((rho_eff .- rho_eff_prev) ./ dt)
+            @. scratch2 = complex((rho_eff - rho_eff_prev) / dt)
             plans.forward * scratch2
             @. scratch1 = c_sq * kappa * (
                 (1 + absorb.absorb_nabla1) * scratch1
@@ -259,9 +259,8 @@ function _compute_pressure!(
         @. p = real(scratch1)
 
     else
-        c0_sq = c0.^2
-        # For heterogeneous media: multiply by c^2 in spatial domain first
-        scratch1 .= complex.(c0_sq .* rho_eff)
+        # For heterogeneous media: fused c^2 * rho multiply — zero intermediate allocations
+        @. scratch1 = complex(c0^2 * rho_eff)
         plans.forward * scratch1
 
         if !is_absorbing
@@ -286,6 +285,8 @@ function time_step_1d!(
     rhox::Vector{Float64},
     scratch1::Vector{ComplexF64},
     scratch2::Vector{ComplexF64},
+    dpdx::Vector{Float64},                              # pre-allocated pressure gradient
+    duxdx::Vector{Float64},                             # pre-allocated velocity divergence
     kgrid::KWaveGrid1D,
     medium::KWaveMedium,
     source::KWaveSource,
@@ -296,21 +297,20 @@ function time_step_1d!(
     t_index::Int,
     absorb::Union{Nothing, AbsorptionParams},
     rho_total_prev::Union{Nothing, Vector{Float64}}=nothing,
+    rho0_sgx::Union{Nothing, Vector{Float64}}=nothing,  # pre-computed staggered density
 )
     dt = kgrid.dt[]
     c0 = medium.sound_speed
     rho0 = medium.density
 
     # === STEP 1: Pressure gradient ===
-    dpdx = similar(p)
     spectral_gradient!(dpdx, p, kgrid.kx_vec, kgrid.ddx_k_shift_pos, scratch1, plans, 1, 1)
 
     # === STEP 2: Velocity update with PML ===
-    if rho0 isa Real
-        @. ux = pml_x_sgx * (pml_x_sgx * ux - dt / rho0 * dpdx)
-    else
-        rho0_sgx = _stagger_density_1d(rho0)
+    if rho0_sgx !== nothing
         @. ux = pml_x_sgx * (pml_x_sgx * ux - dt / rho0_sgx * dpdx)
+    else
+        @. ux = pml_x_sgx * (pml_x_sgx * ux - dt / rho0 * dpdx)
     end
 
     # === STEP 3: Velocity sources ===
@@ -319,15 +319,10 @@ function time_step_1d!(
     end
 
     # === STEP 4: Velocity divergence ===
-    duxdx = similar(p)
     spectral_gradient!(duxdx, ux, kgrid.kx_vec, kgrid.ddx_k_shift_neg, scratch1, plans, 1, 1)
 
     # === STEP 5: Density update with PML ===
-    if rho0 isa Real
-        @. rhox = pml_x * (pml_x * rhox - dt * rho0 * duxdx)
-    else
-        @. rhox = pml_x * (pml_x * rhox - dt * rho0 * duxdx)
-    end
+    @. rhox = pml_x * (pml_x * rhox - dt * rho0 * duxdx)
 
     # === STEP 6: Pressure sources ===
     if has_pressure_source(source)
@@ -359,44 +354,41 @@ function time_step_2d!(
     rhoy::Matrix{Float64},
     scratch1::Matrix{ComplexF64},
     scratch2::Matrix{ComplexF64},
+    dpdx::Matrix{Float64},                              # pre-allocated pressure gradient x
+    dpdy::Matrix{Float64},                              # pre-allocated pressure gradient y
+    duxdx::Matrix{Float64},                             # pre-allocated velocity divergence x
+    duydy::Matrix{Float64},                             # pre-allocated velocity divergence y
+    rho_total::Matrix{Float64},                         # pre-allocated density sum buffer
     kgrid::KWaveGrid2D,
     medium::KWaveMedium,
     source::KWaveSource,
-    pml_x::Vector{Float64},
-    pml_y::Vector{Float64},
-    pml_x_sgx::Vector{Float64},
-    pml_y_sgy::Vector{Float64},
+    pml_x_col,                                          # pre-reshaped PML (Nx×1)
+    pml_y_row,                                          # pre-reshaped PML (1×Ny)
+    pml_x_sgx_col,                                      # pre-reshaped staggered PML (Nx×1)
+    pml_y_sgy_row,                                      # pre-reshaped staggered PML (1×Ny)
     kappa::Matrix{Float64},
     plans::FFTPlans,
     t_index::Int,
     absorb::Union{Nothing, AbsorptionParams}=nothing,
     rho_total_prev::Union{Nothing, Matrix{Float64}}=nothing,
+    rho0_sgx::Union{Nothing, Matrix{Float64}}=nothing,  # pre-computed staggered density x
+    rho0_sgy::Union{Nothing, Matrix{Float64}}=nothing,  # pre-computed staggered density y
 )
     dt = kgrid.dt[]
     c0 = medium.sound_speed
     rho0 = medium.density
 
-    # Reshape PML vectors for 2D broadcasting
-    pml_x_col = reshape(pml_x, :, 1)
-    pml_y_row = reshape(pml_y, 1, :)
-    pml_x_sgx_col = reshape(pml_x_sgx, :, 1)
-    pml_y_sgy_row = reshape(pml_y_sgy, 1, :)
-
     # === STEP 1: Pressure gradient via FFT ===
-    dpdx = similar(p)
-    dpdy = similar(p)
     spectral_gradient!(dpdx, p, kgrid.kx_vec, kgrid.ddx_k_shift_pos, scratch1, plans, 1, 2)
     spectral_gradient!(dpdy, p, kgrid.ky_vec, kgrid.ddy_k_shift_pos, scratch1, plans, 2, 2)
 
     # === STEP 2: Velocity update with PML ===
-    if rho0 isa Real
-        @. ux = pml_x_sgx_col * (pml_x_sgx_col * ux - dt / rho0 * dpdx)
-        @. uy = pml_y_sgy_row * (pml_y_sgy_row * uy - dt / rho0 * dpdy)
-    else
-        rho0_sgx = _stagger_density_2d(rho0, 1)
-        rho0_sgy = _stagger_density_2d(rho0, 2)
+    if rho0_sgx !== nothing
         @. ux = pml_x_sgx_col * (pml_x_sgx_col * ux - dt / rho0_sgx * dpdx)
         @. uy = pml_y_sgy_row * (pml_y_sgy_row * uy - dt / rho0_sgy * dpdy)
+    else
+        @. ux = pml_x_sgx_col * (pml_x_sgx_col * ux - dt / rho0 * dpdx)
+        @. uy = pml_y_sgy_row * (pml_y_sgy_row * uy - dt / rho0 * dpdy)
     end
 
     # === STEP 3: Add velocity sources ===
@@ -405,19 +397,12 @@ function time_step_2d!(
     end
 
     # === STEP 4: Velocity divergence via FFT ===
-    duxdx = similar(p)
-    duydy = similar(p)
     spectral_gradient!(duxdx, ux, kgrid.kx_vec, kgrid.ddx_k_shift_neg, scratch1, plans, 1, 2)
     spectral_gradient!(duydy, uy, kgrid.ky_vec, kgrid.ddy_k_shift_neg, scratch1, plans, 2, 2)
 
     # === STEP 5: Density update with split-field PML ===
-    if rho0 isa Real
-        @. rhox = pml_x_col * (pml_x_col * rhox - dt * rho0 * duxdx)
-        @. rhoy = pml_y_row * (pml_y_row * rhoy - dt * rho0 * duydy)
-    else
-        @. rhox = pml_x_col * (pml_x_col * rhox - dt * rho0 * duxdx)
-        @. rhoy = pml_y_row * (pml_y_row * rhoy - dt * rho0 * duydy)
-    end
+    @. rhox = pml_x_col * (pml_x_col * rhox - dt * rho0 * duxdx)
+    @. rhoy = pml_y_row * (pml_y_row * rhoy - dt * rho0 * duydy)
 
     # === STEP 6: Add pressure/mass sources ===
     if has_pressure_source(source)
@@ -425,7 +410,7 @@ function time_step_2d!(
     end
 
     # === STEP 7: Equation of state ===
-    rho_total = rhox .+ rhoy
+    @. rho_total = rhox + rhoy
 
     _compute_pressure!(p, rho_total, rho_total_prev,
                       scratch1, scratch2, kappa,
@@ -451,54 +436,49 @@ function time_step_3d!(
     rhoz::Array{Float64,3},
     scratch1::Array{ComplexF64,3},
     scratch2::Array{ComplexF64,3},
+    dpdx::Array{Float64,3},                             # pre-allocated pressure gradient x
+    dpdy::Array{Float64,3},                             # pre-allocated pressure gradient y
+    dpdz::Array{Float64,3},                             # pre-allocated pressure gradient z
+    duxdx::Array{Float64,3},                            # pre-allocated velocity divergence x
+    duydy::Array{Float64,3},                            # pre-allocated velocity divergence y
+    duzdz::Array{Float64,3},                            # pre-allocated velocity divergence z
+    rho_total::Array{Float64,3},                        # pre-allocated density sum buffer
     kgrid::KWaveGrid3D,
     medium::KWaveMedium,
     source::KWaveSource,
-    pml_x::Vector{Float64},
-    pml_y::Vector{Float64},
-    pml_z::Vector{Float64},
-    pml_x_sgx::Vector{Float64},
-    pml_y_sgy::Vector{Float64},
-    pml_z_sgz::Vector{Float64},
+    pml_x_r,                                            # pre-reshaped PML (Nx×1×1)
+    pml_y_r,                                            # pre-reshaped PML (1×Ny×1)
+    pml_z_r,                                            # pre-reshaped PML (1×1×Nz)
+    pml_x_sgx_r,                                        # pre-reshaped staggered PML (Nx×1×1)
+    pml_y_sgy_r,                                        # pre-reshaped staggered PML (1×Ny×1)
+    pml_z_sgz_r,                                        # pre-reshaped staggered PML (1×1×Nz)
     kappa::Array{Float64,3},
     plans::FFTPlans,
     t_index::Int,
     absorb::Union{Nothing, AbsorptionParams}=nothing,
     rho_total_prev::Union{Nothing, Array{Float64,3}}=nothing,
+    rho0_sgx::Union{Nothing, Array{Float64,3}}=nothing, # pre-computed staggered density x
+    rho0_sgy::Union{Nothing, Array{Float64,3}}=nothing, # pre-computed staggered density y
+    rho0_sgz::Union{Nothing, Array{Float64,3}}=nothing, # pre-computed staggered density z
 )
     dt = kgrid.dt[]
     c0 = medium.sound_speed
     rho0 = medium.density
-    Nx, Ny, Nz = kgrid.Nx, kgrid.Ny, kgrid.Nz
-
-    # Reshape PML vectors for 3D broadcasting
-    pml_x_r = reshape(pml_x, :, 1, 1)
-    pml_y_r = reshape(pml_y, 1, :, 1)
-    pml_z_r = reshape(pml_z, 1, 1, :)
-    pml_x_sgx_r = reshape(pml_x_sgx, :, 1, 1)
-    pml_y_sgy_r = reshape(pml_y_sgy, 1, :, 1)
-    pml_z_sgz_r = reshape(pml_z_sgz, 1, 1, :)
 
     # === STEP 1: Pressure gradient via FFT ===
-    dpdx = similar(p)
-    dpdy = similar(p)
-    dpdz = similar(p)
     spectral_gradient!(dpdx, p, kgrid.kx_vec, kgrid.ddx_k_shift_pos, scratch1, plans, 1, 3)
     spectral_gradient!(dpdy, p, kgrid.ky_vec, kgrid.ddy_k_shift_pos, scratch1, plans, 2, 3)
     spectral_gradient!(dpdz, p, kgrid.kz_vec, kgrid.ddz_k_shift_pos, scratch1, plans, 3, 3)
 
     # === STEP 2: Velocity update with PML ===
-    if rho0 isa Real
-        @. ux = pml_x_sgx_r * (pml_x_sgx_r * ux - dt / rho0 * dpdx)
-        @. uy = pml_y_sgy_r * (pml_y_sgy_r * uy - dt / rho0 * dpdy)
-        @. uz = pml_z_sgz_r * (pml_z_sgz_r * uz - dt / rho0 * dpdz)
-    else
-        rho0_sgx = _stagger_density_3d(rho0, 1)
-        rho0_sgy = _stagger_density_3d(rho0, 2)
-        rho0_sgz = _stagger_density_3d(rho0, 3)
+    if rho0_sgx !== nothing
         @. ux = pml_x_sgx_r * (pml_x_sgx_r * ux - dt / rho0_sgx * dpdx)
         @. uy = pml_y_sgy_r * (pml_y_sgy_r * uy - dt / rho0_sgy * dpdy)
         @. uz = pml_z_sgz_r * (pml_z_sgz_r * uz - dt / rho0_sgz * dpdz)
+    else
+        @. ux = pml_x_sgx_r * (pml_x_sgx_r * ux - dt / rho0 * dpdx)
+        @. uy = pml_y_sgy_r * (pml_y_sgy_r * uy - dt / rho0 * dpdy)
+        @. uz = pml_z_sgz_r * (pml_z_sgz_r * uz - dt / rho0 * dpdz)
     end
 
     # === STEP 3: Add velocity sources ===
@@ -507,23 +487,14 @@ function time_step_3d!(
     end
 
     # === STEP 4: Velocity divergence via FFT ===
-    duxdx = similar(p)
-    duydy = similar(p)
-    duzdz = similar(p)
     spectral_gradient!(duxdx, ux, kgrid.kx_vec, kgrid.ddx_k_shift_neg, scratch1, plans, 1, 3)
     spectral_gradient!(duydy, uy, kgrid.ky_vec, kgrid.ddy_k_shift_neg, scratch1, plans, 2, 3)
     spectral_gradient!(duzdz, uz, kgrid.kz_vec, kgrid.ddz_k_shift_neg, scratch1, plans, 3, 3)
 
     # === STEP 5: Density update with split-field PML ===
-    if rho0 isa Real
-        @. rhox = pml_x_r * (pml_x_r * rhox - dt * rho0 * duxdx)
-        @. rhoy = pml_y_r * (pml_y_r * rhoy - dt * rho0 * duydy)
-        @. rhoz = pml_z_r * (pml_z_r * rhoz - dt * rho0 * duzdz)
-    else
-        @. rhox = pml_x_r * (pml_x_r * rhox - dt * rho0 * duxdx)
-        @. rhoy = pml_y_r * (pml_y_r * rhoy - dt * rho0 * duydy)
-        @. rhoz = pml_z_r * (pml_z_r * rhoz - dt * rho0 * duzdz)
-    end
+    @. rhox = pml_x_r * (pml_x_r * rhox - dt * rho0 * duxdx)
+    @. rhoy = pml_y_r * (pml_y_r * rhoy - dt * rho0 * duydy)
+    @. rhoz = pml_z_r * (pml_z_r * rhoz - dt * rho0 * duzdz)
 
     # === STEP 6: Add pressure/mass sources ===
     if has_pressure_source(source)
@@ -531,7 +502,7 @@ function time_step_3d!(
     end
 
     # === STEP 7: Equation of state ===
-    rho_total = rhox .+ rhoy .+ rhoz
+    @. rho_total = rhox + rhoy + rhoz
 
     _compute_pressure!(p, rho_total, rho_total_prev,
                       scratch1, scratch2, kappa,

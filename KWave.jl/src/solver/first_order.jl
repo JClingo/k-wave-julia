@@ -160,11 +160,18 @@ function kspace_first_order(
     # ================================================================
     # 6. Allocate field arrays
     # ================================================================
-    p = zeros(Float64, Nx)
-    ux = zeros(Float64, Nx)
+    p    = zeros(Float64, Nx)
+    ux   = zeros(Float64, Nx)
     rhox = zeros(Float64, Nx)
     scratch1 = zeros(ComplexF64, Nx)
     scratch2 = zeros(ComplexF64, Nx)
+
+    # Pre-allocated scratch buffers — eliminates per-step allocations in hot loop
+    dpdx  = zeros(Float64, Nx)
+    duxdx = zeros(Float64, Nx)
+
+    # Pre-compute staggered density for heterogeneous media (time-invariant)
+    rho0_sgx_1d = medium.density isa AbstractArray ? _stagger_density_1d(medium.density) : nothing
 
     # For dispersion: track previous total density
     rho_total_prev = (absorb !== nothing && absorb.mode != :no_dispersion) ?
@@ -221,10 +228,12 @@ function kspace_first_order(
         time_step_1d!(
             p, ux, rhox,
             scratch1, scratch2,
+            dpdx, duxdx,
             kgrid, medium, source,
             pml_x, pml_x_sgx,
             kappa, plans, t_index,
             absorb, rho_total_prev,
+            rho0_sgx_1d,
         )
 
         if !isempty(mask_indices)
@@ -340,13 +349,30 @@ function kspace_first_order(
     # ================================================================
     # 6. Allocate field arrays
     # ================================================================
-    p = zeros(Float64, Nx, Ny)
-    ux = zeros(Float64, Nx, Ny)
-    uy = zeros(Float64, Nx, Ny)
+    p    = zeros(Float64, Nx, Ny)
+    ux   = zeros(Float64, Nx, Ny)
+    uy   = zeros(Float64, Nx, Ny)
     rhox = zeros(Float64, Nx, Ny)
     rhoy = zeros(Float64, Nx, Ny)
     scratch1 = zeros(ComplexF64, Nx, Ny)
     scratch2 = zeros(ComplexF64, Nx, Ny)
+
+    # Pre-allocated scratch buffers — eliminates per-step allocations in hot loop
+    dpdx      = zeros(Float64, Nx, Ny)
+    dpdy      = zeros(Float64, Nx, Ny)
+    duxdx     = zeros(Float64, Nx, Ny)
+    duydy     = zeros(Float64, Nx, Ny)
+    rho_total = zeros(Float64, Nx, Ny)
+
+    # Pre-reshape PML vectors — eliminates per-step wrapper object allocations
+    pml_x_col     = reshape(pml_x,     :, 1)
+    pml_y_row     = reshape(pml_y,     1, :)
+    pml_x_sgx_col = reshape(pml_x_sgx, :, 1)
+    pml_y_sgy_row = reshape(pml_y_sgy, 1, :)
+
+    # Pre-compute staggered density for heterogeneous media (time-invariant)
+    rho0_sgx_2d = medium.density isa AbstractArray ? _stagger_density_2d(medium.density, 1) : nothing
+    rho0_sgy_2d = medium.density isa AbstractArray ? _stagger_density_2d(medium.density, 2) : nothing
 
     rho_total_prev = (absorb !== nothing && absorb.mode != :no_dispersion) ?
         zeros(Float64, Nx, Ny) : nothing
@@ -403,10 +429,12 @@ function kspace_first_order(
         time_step_2d!(
             p, ux, uy, rhox, rhoy,
             scratch1, scratch2,
+            dpdx, dpdy, duxdx, duydy, rho_total,
             kgrid, medium, source,
-            pml_x, pml_y, pml_x_sgx, pml_y_sgy,
+            pml_x_col, pml_y_row, pml_x_sgx_col, pml_y_sgy_row,
             kappa, plans, t_index,
             absorb, rho_total_prev,
+            rho0_sgx_2d, rho0_sgy_2d,
         )
 
         if !isempty(mask_indices)
@@ -524,15 +552,37 @@ function kspace_first_order(
     # ================================================================
     # 6. Allocate field arrays
     # ================================================================
-    p = zeros(Float64, Nx, Ny, Nz)
-    ux = zeros(Float64, Nx, Ny, Nz)
-    uy = zeros(Float64, Nx, Ny, Nz)
-    uz = zeros(Float64, Nx, Ny, Nz)
+    p    = zeros(Float64, Nx, Ny, Nz)
+    ux   = zeros(Float64, Nx, Ny, Nz)
+    uy   = zeros(Float64, Nx, Ny, Nz)
+    uz   = zeros(Float64, Nx, Ny, Nz)
     rhox = zeros(Float64, Nx, Ny, Nz)
     rhoy = zeros(Float64, Nx, Ny, Nz)
     rhoz = zeros(Float64, Nx, Ny, Nz)
     scratch1 = zeros(ComplexF64, Nx, Ny, Nz)
     scratch2 = zeros(ComplexF64, Nx, Ny, Nz)
+
+    # Pre-allocated scratch buffers — eliminates per-step allocations in hot loop
+    dpdx      = zeros(Float64, Nx, Ny, Nz)
+    dpdy      = zeros(Float64, Nx, Ny, Nz)
+    dpdz      = zeros(Float64, Nx, Ny, Nz)
+    duxdx     = zeros(Float64, Nx, Ny, Nz)
+    duydy     = zeros(Float64, Nx, Ny, Nz)
+    duzdz     = zeros(Float64, Nx, Ny, Nz)
+    rho_total = zeros(Float64, Nx, Ny, Nz)
+
+    # Pre-reshape PML vectors — eliminates per-step wrapper object allocations
+    pml_x_r     = reshape(pml_x,     :, 1, 1)
+    pml_y_r     = reshape(pml_y,     1, :, 1)
+    pml_z_r     = reshape(pml_z,     1, 1, :)
+    pml_x_sgx_r = reshape(pml_x_sgx, :, 1, 1)
+    pml_y_sgy_r = reshape(pml_y_sgy, 1, :, 1)
+    pml_z_sgz_r = reshape(pml_z_sgz, 1, 1, :)
+
+    # Pre-compute staggered density for heterogeneous media (time-invariant)
+    rho0_sgx_3d = medium.density isa AbstractArray ? _stagger_density_3d(medium.density, 1) : nothing
+    rho0_sgy_3d = medium.density isa AbstractArray ? _stagger_density_3d(medium.density, 2) : nothing
+    rho0_sgz_3d = medium.density isa AbstractArray ? _stagger_density_3d(medium.density, 3) : nothing
 
     rho_total_prev = (absorb !== nothing && absorb.mode != :no_dispersion) ?
         zeros(Float64, Nx, Ny, Nz) : nothing
@@ -590,11 +640,12 @@ function kspace_first_order(
         time_step_3d!(
             p, ux, uy, uz, rhox, rhoy, rhoz,
             scratch1, scratch2,
+            dpdx, dpdy, dpdz, duxdx, duydy, duzdz, rho_total,
             kgrid, medium, source,
-            pml_x, pml_y, pml_z,
-            pml_x_sgx, pml_y_sgy, pml_z_sgz,
+            pml_x_r, pml_y_r, pml_z_r, pml_x_sgx_r, pml_y_sgy_r, pml_z_sgz_r,
             kappa, plans, t_index,
             absorb, rho_total_prev,
+            rho0_sgx_3d, rho0_sgy_3d, rho0_sgz_3d,
         )
 
         if !isempty(mask_indices)
