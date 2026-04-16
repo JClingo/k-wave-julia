@@ -260,7 +260,10 @@ for (label, dim, Nx, Ny, Nz, t_end, pml_size) in GPU_SCENARIOS
             scenario=label, dim=dim, Nx=Nx, Ny=Ny, Nz=Nz, Nt=Nt,
             medium_type="homogeneous", r...
         ))
-    catch e; println(" ERROR: $e"); end
+    catch e
+        println(" ERROR: $e")
+        Base.showerror(stdout, e, catch_backtrace()); println()
+    end
 end
 
 # ─────────────────────────────────────────────────────────────

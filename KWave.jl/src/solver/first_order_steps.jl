@@ -65,7 +65,7 @@ function initialize_p0_1d!(p::AbstractVector, ux::AbstractVector,
     end
 
     FT = eltype(p)
-    p0 = FT.(source.p0)
+    p0 = FT.(source.p0 isa Array ? source.p0 : Array(source.p0))
 
     if smooth_p0 && kgrid.Nx > 4
         p0 = smooth(p0; restore_max=true)
@@ -104,7 +104,7 @@ function initialize_p0_2d!(p::AbstractMatrix, ux::AbstractMatrix, uy::AbstractMa
     end
 
     FT = eltype(p)
-    p0 = FT.(source.p0)
+    p0 = FT.(source.p0 isa Array ? source.p0 : Array(source.p0))
 
     if smooth_p0 && kgrid.Nx > 1 && kgrid.Ny > 1
         p0 = smooth(p0; restore_max=true)
@@ -152,7 +152,7 @@ function initialize_p0_3d!(p::AbstractArray{<:Real,3}, ux::AbstractArray{<:Real,
     end
 
     FT = eltype(p)
-    p0 = FT.(source.p0)
+    p0 = FT.(source.p0 isa Array ? source.p0 : Array(source.p0))
 
     if smooth_p0 && kgrid.Nx > 1 && kgrid.Ny > 1 && kgrid.Nz > 1
         p0 = smooth(p0; restore_max=true)

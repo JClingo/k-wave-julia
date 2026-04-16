@@ -10,7 +10,7 @@
 Pre-compute absorption parameters from medium properties.
 Returns `nothing` if medium is lossless, otherwise an `AbsorptionParams`.
 """
-function _precompute_absorption(medium::KWaveMedium, k_grid::AbstractArray, c_ref::Float64)
+function _precompute_absorption(medium::KWaveMedium, k_grid::AbstractArray, c_ref::Real)
     if is_lossless(medium)
         return nothing
     end
@@ -32,7 +32,7 @@ end
 """
 Compute k-space correction factor: kappa = sinc(c_ref * k * dt / 2) (unnormalized).
 """
-function _compute_kappa(k_grid::AbstractArray, c_ref::Float64, dt::Float64)
+function _compute_kappa(k_grid::AbstractArray, c_ref::Real, dt::Real)
     kappa = similar(k_grid)
     for i in eachindex(k_grid)
         arg = c_ref * k_grid[i] * dt / 2
