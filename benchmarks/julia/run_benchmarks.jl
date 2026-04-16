@@ -35,6 +35,18 @@ catch e
     @info "AppleAccelerate not available: $(e). Using FFTW for all FFT operations."
 end
 
+# Load MKL on Windows before KWave/FFTW so that FFTW routes through Intel MKL
+# (KWaveMKLExt is triggered automatically).  MKL uses its own threading and
+# avoids the EXCEPTION_ACCESS_VIOLATION in FFTW's Julia-task thread callback
+# that crashes multi-threaded 3D FFTs on Windows.
+if Sys.iswindows()
+    try
+        using MKL
+    catch e
+        @warn "MKL not available on Windows: $(e). FFTW will run single-threaded to avoid crash."
+    end
+end
+
 using KWave
 using FFTW
 using LinearAlgebra: mul!
@@ -63,7 +75,10 @@ mkpath(RESULTS_DIR)
 # Apply FFTW threading at startup so the planning stage also uses multiple threads.
 # create_fft_plans() also calls this, but setting it here ensures the benchmark
 # header prints the correct thread count before any plan is created.
-FFTW.set_num_threads(Threads.nthreads())
+# Windows + stock FFTW: the Julia-task thread callback crashes; MKL uses its own
+# threading and is safe.  fftw_nthreads() captures this logic once.
+fftw_nthreads() = (Sys.iswindows() && FFTW.get_provider() != "mkl") ? 1 : Threads.nthreads()
+FFTW.set_num_threads(fftw_nthreads())
 
 println("=" ^ 65)
 println("KWave.jl CPU Benchmark Suite")
@@ -338,7 +353,7 @@ function run_fft_benchmarks()
 
     end
     # Restore thread count for subsequent (larger) benchmarks
-    FFTW.set_num_threads(Threads.nthreads())
+    FFTW.set_num_threads(fftw_nthreads())
 
     # 2D rfft
     for (Nx, Ny) in [(64,64),(128,128),(256,256),(512,512),(1024,1024)]

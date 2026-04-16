@@ -2,7 +2,7 @@
 
 julia_version = "1.12.6"
 manifest_format = "2.0"
-project_hash = "d8d4f272d0df32f5185e5ddf8448fccd3ba23249"
+project_hash = "e2135e429517f0b0c966795cfa1c70243895afec"
 
 [[deps.AbstractFFTs]]
 deps = ["LinearAlgebra"]
@@ -1143,6 +1143,12 @@ version = "0.3.29"
 [[deps.Logging]]
 uuid = "56ddb016-857b-54e1-b83d-db4d58db5568"
 version = "1.11.0"
+
+[[deps.MKL]]
+deps = ["Artifacts", "Libdl", "LinearAlgebra", "Logging", "MKL_jll"]
+git-tree-sha1 = "7babad0b8cb353d15ed85090342d3c63af5f6819"
+uuid = "33e6dc65-8f57-5167-99aa-e5a354878fb2"
+version = "0.9.1"
 
 [[deps.MKL_jll]]
 deps = ["Artifacts", "IntelOpenMP_jll", "JLLWrappers", "LazyArtifacts", "Libdl", "oneTBB_jll"]
