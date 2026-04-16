@@ -46,7 +46,12 @@ function create_fft_plans(dims::Tuple; data_cast::Type{T}=Float64) where T <: Ab
     # synchronisation overhead exceeds the compute benefit and can make Julia
     # 10× slower than MATLAB on 1D scenarios.  Threshold chosen empirically:
     # single-threaded is faster below ~64 k points; multi-threaded above.
-    nthreads = prod(dims) >= 65_536 ? Threads.nthreads() : 1
+    # Windows + stock FFTW: the Julia-task thread callback crashes with
+    # EXCEPTION_ACCESS_VIOLATION (fftw_threads_set_callback / pawn_apply).
+    # MKL.jl replaces the backend with Intel MKL, which uses its own threading
+    # and is safe.  Fall back to 1 thread only when FFTW (not MKL) is active on Windows.
+    windows_fftw = Sys.iswindows() && FFTW.get_provider() != "mkl"
+    nthreads = (!windows_fftw && prod(dims) >= 65_536) ? Threads.nthreads() : 1
     FFTW.set_num_threads(nthreads)
     real_tmp    = zeros(T, dims...)
     rfft_dims   = (dims[1] ÷ 2 + 1, dims[2:end]...)
